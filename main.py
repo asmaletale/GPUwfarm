@@ -1,0 +1,133 @@
+"""
+Wind Farm Layout + Yaw Optimiser — GPU Genetic Algorithm
+FLORIS-traceable physics layer.
+
+Usage:
+    python main.py [--combination SOSFS|FLS|MAX] [--generations N]
+                   [--pop N] [--turbines N] [--multispeed]
+
+Physics sources:
+    Wake velocity:   FLORIS floris/core/wake_velocity/gauss.py
+    Turbulence:      FLORIS floris/core/wake_turbulence/crespo_hernandez.py
+    Deflection:      FLORIS floris/core/wake_deflection/gauss.py
+    Combination:     FLORIS floris/core/wake_combination/{sosfs,fls,max}.py
+    Power curve:     FLORIS floris/core/turbine/operation_models.py (NREL 5 MW)
+    Wind rose / AEP: FLORIS floris/wind_data.py + floris/floris_model.py
+"""
+from __future__ import annotations
+import argparse
+import numpy as np
+import cupy as cp
+import matplotlib.pyplot as plt
+
+from config import WakeConfig, FarmConfig, GAConfig, TurbineConfig
+from physics.farm_evaluator import FarmEvaluator
+from physics.turbine.power_curve import TurbineData
+from projection.base import CompositeProjection
+from projection.spacing import PairwiseSpacingProjection
+from projection.boundary import BoundaryProjection
+from optimizer.genetic import GeneticAlgorithm
+from wind.wind_rose import WindRose
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Argument parsing
+# ──────────────────────────────────────────────────────────────────────
+
+def parse_args():
+    p = argparse.ArgumentParser(description="GPU Wind Farm Optimiser")
+    p.add_argument("--combination",  default="SOSFS", choices=["SOSFS", "FLS", "MAX"])
+    p.add_argument("--generations",  type=int,   default=150)
+    p.add_argument("--pop",          type=int,   default=256)
+    p.add_argument("--turbines",     type=int,   default=20)
+    p.add_argument("--multispeed",   action="store_true",
+                   help="Use 12-sector × 11-speed Weibull wind rose")
+    p.add_argument("--no-plot",      action="store_true")
+    return p.parse_args()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Visualisation helpers
+# ──────────────────────────────────────────────────────────────────────
+
+def plot_layout(sol: cp.ndarray, title: str = "Best Layout + Yaw") -> None:
+    sol_np = cp.asnumpy(sol)   # (T, 3)
+    x, y, yaw = sol_np[:, 0], sol_np[:, 1], sol_np[:, 2]
+    plt.figure(figsize=(7, 7))
+    plt.scatter(x, y, s=80, zorder=3)
+    for i in range(len(x)):
+        plt.arrow(x[i], y[i], 60 * np.cos(yaw[i]), 60 * np.sin(yaw[i]),
+                  head_width=20, head_length=15, fc="tab:blue", ec="tab:blue")
+    plt.grid(True, alpha=0.3)
+    plt.title(title)
+    plt.xlabel("Easting (m)")
+    plt.ylabel("Northing (m)")
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_convergence(history: list, title: str = "AEP Convergence") -> None:
+    plt.figure(figsize=(9, 4))
+    plt.plot(history)
+    plt.xlabel("Generation")
+    plt.ylabel("Best AEP (kWh)")
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    args = parse_args()
+
+    # ── Configuration ──────────────────────────────────────────────────
+    wake_cfg    = WakeConfig(combination=args.combination)
+    farm_cfg    = FarmConfig(n_turbines=args.turbines)
+    turbine_cfg = TurbineConfig()
+    ga_cfg      = GAConfig(pop_size=args.pop, n_generations=args.generations)
+
+    # ── Wind rose ──────────────────────────────────────────────────────
+    if args.multispeed:
+        wind_rose = WindRose.default_12sector_multispeed()
+        print(f"Wind rose: 12 sectors × {len(wind_rose.wind_speeds)} speed bins")
+    else:
+        wind_rose = WindRose.default_12sector()
+        print(f"Wind rose: 12 sectors × 1 speed bin")
+
+    # ── Physics layer ──────────────────────────────────────────────────
+    turbine_data = TurbineData.nrel_5mw()
+    evaluator = FarmEvaluator(farm_cfg, turbine_cfg, wake_cfg, turbine_data)
+
+    # ── Projection chain ───────────────────────────────────────────────
+    projection = CompositeProjection([
+        PairwiseSpacingProjection(farm_cfg, n_passes=10),
+        BoundaryProjection(farm_cfg),
+    ])
+
+    # ── GA ────────────────────────────────────────────────────────────
+    ga = GeneticAlgorithm(farm_cfg, ga_cfg, evaluator, projection, wind_rose)
+
+    print(f"\nStarting optimisation:")
+    print(f"  Turbines:    {farm_cfg.n_turbines}")
+    print(f"  Population:  {ga_cfg.pop_size}")
+    print(f"  Generations: {ga_cfg.n_generations}")
+    print(f"  Wake combo:  {wake_cfg.combination}")
+    print(f"  GPU:         {cp.cuda.Device().id}\n")
+
+    best, history = ga.run(verbose=True)
+
+    # ── Final results ──────────────────────────────────────────────────
+    print(f"\nOptimisation complete.")
+    print(f"Best AEP: {history[-1]:.4e} kWh/yr")
+
+    if not args.no_plot:
+        plot_layout(best)
+        plot_convergence(history)
+
+
+if __name__ == "__main__":
+    main()

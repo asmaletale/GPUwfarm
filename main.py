@@ -16,6 +16,20 @@ Physics sources:
 """
 from __future__ import annotations
 import argparse
+import os
+import sys
+
+# On Windows without a full CUDA toolkit, PyTorch ships the CUDA DLLs
+# (curand, cublas, etc.) that CuPy needs. Register that directory before
+# importing CuPy so cuda-pathfinder can locate them.
+if sys.platform == "win32":
+    _torch_lib = os.path.join(
+        os.path.dirname(sys.executable), "..", "Lib", "site-packages", "torch", "lib"
+    )
+    _torch_lib = os.path.normpath(_torch_lib)
+    if os.path.isdir(_torch_lib):
+        os.add_dll_directory(_torch_lib)
+
 import numpy as np
 import cupy as cp
 import matplotlib.pyplot as plt

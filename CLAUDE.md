@@ -1,5 +1,20 @@
 # GPUwfarm — CuPy Wind Farm Optimizer
 
+## Python Interpreter
+
+Default interpreter for this project (CUDA 12.6 laptop):
+
+```
+C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe
+```
+
+Run tests and scripts with this interpreter:
+
+```bash
+& "C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m pytest tests/ -v
+& "C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" main.py
+```
+
 ## Project Purpose
 
 A GPU-accelerated genetic algorithm for wind farm layout and yaw optimization.

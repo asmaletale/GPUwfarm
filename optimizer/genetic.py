@@ -51,14 +51,23 @@ class GeneticAlgorithm:
     # Initialisation
     # ──────────────────────────────────────────────────────────────────
 
-    def init_population(self) -> cp.ndarray:
-        """Return (P, T, 3) random initial population."""
+    def init_population(self, seed_layout: np.ndarray | None = None) -> cp.ndarray:
+        """
+        Return (P, T, 3) initial population.
+
+        If seed_layout (N, 2) is provided the first individual is initialised
+        from those positions with zero yaw; the rest are randomised as usual.
+        """
         P, T = self.ga_cfg.pop_size, self.farm_cfg.n_turbines
         pop  = cp.zeros((P, T, 3), dtype=cp.float32)
 
         pop[:, :, 0] = cp.random.uniform(0, self.farm_cfg.area_width,  (P, T))
         pop[:, :, 1] = cp.random.uniform(0, self.farm_cfg.area_height, (P, T))
         pop[:, :, 2] = cp.random.uniform(-self._max_yaw, self._max_yaw, (P, T))
+
+        if seed_layout is not None:
+            pop[0, :, :2] = cp.asarray(seed_layout[:T].astype(np.float32))
+            pop[0, :,  2] = 0.0
 
         return pop
 
@@ -112,7 +121,11 @@ class GeneticAlgorithm:
     # Main optimisation loop
     # ──────────────────────────────────────────────────────────────────
 
-    def run(self, verbose: bool = True) -> tuple[cp.ndarray, list[float]]:
+    def run(
+        self,
+        verbose: bool = True,
+        seed_layout: np.ndarray | None = None,
+    ) -> tuple[cp.ndarray, list[float]]:
         """
         Run the genetic algorithm.
 
@@ -120,7 +133,7 @@ class GeneticAlgorithm:
             best_individual: (T, 3) best layout found
             history:         list of best AEP per generation (Python floats)
         """
-        pop     = self.init_population()
+        pop     = self.init_population(seed_layout=seed_layout)
         history: List[float] = []
 
         for g in range(self.ga_cfg.n_generations):

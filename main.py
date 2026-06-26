@@ -28,6 +28,7 @@ from projection.spacing import PairwiseSpacingProjection
 from projection.boundary import BoundaryProjection
 from optimizer.genetic import GeneticAlgorithm
 from wind.wind_rose import WindRose
+from loaders.floris_yaml import load_floris_yaml
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -36,6 +37,9 @@ from wind.wind_rose import WindRose
 
 def parse_args():
     p = argparse.ArgumentParser(description="GPU Wind Farm Optimiser")
+    p.add_argument("--floris-yaml",  default=None, metavar="PATH",
+                   help="Path to a FLORIS v4 input YAML; overrides --combination, "
+                        "--turbines, and wind-rose flags")
     p.add_argument("--combination",  default="SOSFS", choices=["SOSFS", "FLS", "MAX"])
     p.add_argument("--generations",  type=int,   default=150)
     p.add_argument("--pop",          type=int,   default=256)
@@ -84,22 +88,37 @@ def plot_convergence(history: list, title: str = "AEP Convergence") -> None:
 def main() -> None:
     args = parse_args()
 
-    # ── Configuration ──────────────────────────────────────────────────
-    wake_cfg    = WakeConfig(combination=args.combination)
-    farm_cfg    = FarmConfig(n_turbines=args.turbines)
-    turbine_cfg = TurbineConfig()
-    ga_cfg      = GAConfig(pop_size=args.pop, n_generations=args.generations)
+    seed_layout = None
 
-    # ── Wind rose ──────────────────────────────────────────────────────
-    if args.multispeed:
-        wind_rose = WindRose.default_12sector_multispeed()
-        print(f"Wind rose: 12 sectors × {len(wind_rose.wind_speeds)} speed bins")
+    if args.floris_yaml:
+        # ── Load everything from a FLORIS YAML ─────────────────────────
+        inp = load_floris_yaml(args.floris_yaml)
+        farm_cfg     = inp["farm_cfg"]
+        wake_cfg     = inp["wake_cfg"]
+        turbine_cfg  = inp["turbine_cfg"]
+        turbine_data = inp["turbine_data"]
+        wind_rose    = inp["wind_rose"]
+        seed_layout  = inp["layout_xy"]
+        ga_cfg = GAConfig(pop_size=args.pop, n_generations=args.generations)
+        print(f"Loaded FLORIS YAML: {args.floris_yaml}")
+        print(f"Wind rose: {len(wind_rose.wind_dirs)} dirs × "
+              f"{len(wind_rose.wind_speeds)} speeds")
     else:
-        wind_rose = WindRose.default_12sector()
-        print(f"Wind rose: 12 sectors × 1 speed bin")
+        # ── Manual configuration ────────────────────────────────────────
+        wake_cfg    = WakeConfig(combination=args.combination)
+        farm_cfg    = FarmConfig(n_turbines=args.turbines)
+        turbine_cfg = TurbineConfig()
+        turbine_data = TurbineData.nrel_5mw()
+        ga_cfg      = GAConfig(pop_size=args.pop, n_generations=args.generations)
+
+        if args.multispeed:
+            wind_rose = WindRose.default_12sector_multispeed()
+            print(f"Wind rose: 12 sectors × {len(wind_rose.wind_speeds)} speed bins")
+        else:
+            wind_rose = WindRose.default_12sector()
+            print(f"Wind rose: 12 sectors × 1 speed bin")
 
     # ── Physics layer ──────────────────────────────────────────────────
-    turbine_data = TurbineData.nrel_5mw()
     evaluator = FarmEvaluator(farm_cfg, turbine_cfg, wake_cfg, turbine_data)
 
     # ── Projection chain ───────────────────────────────────────────────
@@ -118,7 +137,7 @@ def main() -> None:
     print(f"  Wake combo:  {wake_cfg.combination}")
     print(f"  GPU:         {cp.cuda.Device().id}\n")
 
-    best, history = ga.run(verbose=True)
+    best, history = ga.run(verbose=True, seed_layout=seed_layout)
 
     # ── Final results ──────────────────────────────────────────────────
     print(f"\nOptimisation complete.")

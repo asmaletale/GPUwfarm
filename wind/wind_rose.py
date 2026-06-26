@@ -138,9 +138,9 @@ class WindRose:
         """
         dirs  = np.array([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330],
                          dtype=np.float32)
-        # Original main.py used one speed per direction; reproduce as 12×1 table
+        # N (0°) dominant, S (180°) least frequent; symmetric taper
         speeds = np.array([9.0], dtype=np.float32)   # representative single speed
-        freq_1d = np.array([0.05,0.06,0.07,0.10,0.12,0.11,0.10,0.09,0.08,0.08,0.07,0.07],
+        freq_1d = np.array([0.20,0.14,0.10,0.08,0.06,0.05,0.04,0.05,0.06,0.08,0.10,0.14],
                            dtype=np.float32)
         freq_table = freq_1d[:, None]   # (12, 1)
         ti = np.full((12, 1), 0.06, dtype=np.float32)

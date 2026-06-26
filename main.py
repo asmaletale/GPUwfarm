@@ -14,6 +14,13 @@ Physics sources:
     Power curve:     FLORIS floris/core/turbine/operation_models.py (NREL 5 MW)
     Wind rose / AEP: FLORIS floris/wind_data.py + floris/floris_model.py
 """
+#todo: add visualization like in legacy code
+#todo: add bathymetry
+#todo: include option to switch off yaw optimization (only layout) or switch off layout optimization (only yaw)
+#todo: visualize min lcoe and min vi layouts on the pareto front
+#todo:add wake visualization like in floris (wake velocity deficit, turbulence intensity, etc.)
+#todo: add rotor discretization (like in floris) to have more accurate wake modeling and power calculation
+#todo: change the logic of running the mo optimization by providing coupled objective string
 from __future__ import annotations
 import argparse
 import os
@@ -34,7 +41,7 @@ import numpy as np
 import cupy as cp
 import matplotlib.pyplot as plt
 
-from config import WakeConfig, FarmConfig, GAConfig, TurbineConfig
+from config import WakeConfig, FarmConfig, GAConfig, TurbineConfig, CostConfig, VisualImpactConfig
 from physics.farm_evaluator import FarmEvaluator
 from physics.turbine.power_curve import TurbineData
 from projection.base import CompositeProjection
@@ -60,6 +67,10 @@ def parse_args():
     p.add_argument("--turbines",     type=int,   default=20)
     p.add_argument("--multispeed",   action="store_true",
                    help="Use 12-sector × 11-speed Weibull wind rose")
+    p.add_argument("--multi-objective", action="store_true",
+                   help="Enable multi-objective optimization (LCOE + VI)")
+    p.add_argument("--history-file", default="ga_history.h5", metavar="PATH",
+                   help="File to save generation history (HDF5)")
     p.add_argument("--no-plot",      action="store_true")
     return p.parse_args()
 
@@ -68,7 +79,11 @@ def parse_args():
 # Visualisation helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def plot_layout(sol: cp.ndarray, title: str = "Best Layout + Yaw") -> None:
+def plot_layout(
+    sol: cp.ndarray,
+    title: str = "Best Layout + Yaw",
+    save_path: str = "best_layout.png",
+) -> None:
     sol_np = cp.asnumpy(sol)   # (T, 3)
     x, y, yaw = sol_np[:, 0], sol_np[:, 1], sol_np[:, 2]
     plt.figure(figsize=(7, 7))
@@ -81,10 +96,16 @@ def plot_layout(sol: cp.ndarray, title: str = "Best Layout + Yaw") -> None:
     plt.xlabel("Easting (m)")
     plt.ylabel("Northing (m)")
     plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
     plt.show()
+    print(f"Layout saved to {save_path}")
 
 
-def plot_convergence(history: list, title: str = "AEP Convergence") -> None:
+def plot_convergence(
+    history: list,
+    title: str = "AEP Convergence",
+    save_path: str = "convergence.png",
+) -> None:
     plt.figure(figsize=(9, 4))
     plt.plot(history)
     plt.xlabel("Generation")
@@ -92,7 +113,9 @@ def plot_convergence(history: list, title: str = "AEP Convergence") -> None:
     plt.title(title)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
     plt.show()
+    print(f"Convergence saved to {save_path}")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -142,20 +165,37 @@ def main() -> None:
     ])
 
     # ── GA ────────────────────────────────────────────────────────────
-    ga = GeneticAlgorithm(farm_cfg, ga_cfg, evaluator, projection, wind_rose)
+    cost_cfg = CostConfig()
+    vi_cfg   = VisualImpactConfig() if args.multi_objective else None
+    ga = GeneticAlgorithm(
+        farm_cfg, ga_cfg, evaluator, projection, wind_rose,
+        cost_cfg=cost_cfg,
+        vi_cfg=vi_cfg,
+        history_file=args.history_file
+    )
 
     print(f"\nStarting optimisation:")
     print(f"  Turbines:    {farm_cfg.n_turbines}")
     print(f"  Population:  {ga_cfg.pop_size}")
     print(f"  Generations: {ga_cfg.n_generations}")
     print(f"  Wake combo:  {wake_cfg.combination}")
+    print(f"  Multi-obj:   {args.multi_objective}")
     print(f"  GPU:         {cp.cuda.Device().id}\n")
 
-    best, history = ga.run(verbose=True, seed_layout=seed_layout)
+    best, history, pareto_obj, _ = ga.run(
+        verbose=True,
+        seed_layout=seed_layout,
+        multi_objective=args.multi_objective
+    )
 
     # ── Final results ──────────────────────────────────────────────────
     print(f"\nOptimisation complete.")
     print(f"Best AEP: {history[-1]:.4e} kWh/yr")
+
+    if args.multi_objective and pareto_obj is not None:
+        print(f"Pareto front size: {len(pareto_obj)}")
+        print(f"LCOE range: {pareto_obj[:, 0].min():.2f} – {pareto_obj[:, 0].max():.2f} EUR/MWh")
+        print(f"VI range:   {pareto_obj[:, 1].min():.4f} – {pareto_obj[:, 1].max():.4f}")
 
     if not args.no_plot:
         plot_layout(best)

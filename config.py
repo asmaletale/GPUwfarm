@@ -61,3 +61,68 @@ class GAConfig:
     mutation_rate: float = 0.15
     elite:         int   = 6
     max_yaw_deg:   float = 30.0   # degrees
+
+
+@dataclass
+class VisualImpactConfig:
+    """Observer and geometry parameters for visual impact assessment.
+
+    Legacy source: legacy/AEP.get_farm_VI() + legacy/configBinary.py.
+    Turbine geometry (hub_height, rotor_diameter) is read from TurbineConfig,
+    not duplicated here.
+    """
+    earth_radius: float = 6.371e6   # m
+    xfov_deg:     float = 120.0     # degrees — horizontal field of view
+    zfov_deg:     float = 40.0      # degrees — vertical field of view
+
+    # Observer locations [(x, y)], heights above ground (m), relative weights
+    obs_coords:  list = field(default_factory=lambda: [[0.0, 0.0]])
+    obs_heights: list = field(default_factory=lambda: [1.77])
+    obs_weights: list = field(default_factory=lambda: [1.0])
+
+
+@dataclass
+class CostConfig:
+    """Cost parameters for LCOE calculation. All in millions EUR unless noted."""
+    lifetime:              float = 25.0      # years
+    discount_rate:         float = 0.05      # 5% annual discount
+
+    # CAPEX per turbine
+    dev_consenting_1wt:    float = 3.15      # 0.21 * 15 MW
+    turb_substructure_1wt: float = 32.0      # 1.6 * 15 + 8
+
+    # Transmission (internal & export cables, substations)
+    c_intcab:              float = 0.3035    # millions/km internal cable
+    c_expcable_ac:         float = 2.336     # millions/km export cable AC
+    c_expcable_dc:         float = 1.168     # millions/km export cable DC
+    c_offsub_ac:           float = 39.0      # offshore substation AC
+    c_offsub_dc:           float = 142.75    # offshore substation DC
+    c_onsub_dc:            float = 84.35     # onshore substation DC
+    ac_dc_threshold:       float = 55.0      # km threshold for AC/DC choice
+    n_expcables_ac:        float = 1.0       # cables per 300 MW
+    n_expcables_dc:        float = 1.0       # cables per 300 MW
+
+    # Mooring (per turbine, normalized)
+    n_lines:               float = 3.0       # mooring lines per turbine
+    mbl_chain:             float = 22286.0   # kN (breaking load)
+    mbl_dea:               float = 9800.0    # kN (dynamic event analyzer)
+    f_usd_eur:             float = 0.92      # USD to EUR conversion
+
+    # Installation
+    t_inst:                float = 48.0      # hours per turbine
+    v_ahts:                float = 10.0      # km/h (AHTS vessel speed)
+    v_psv:                 float = 61.7      # km/h (PSV vessel speed)
+    c_boat:                float = 0.011979  # millions/hour rental
+    n_turtrip:             float = 3.0       # turbines per trip
+    n_fltrip:              float = 2.0       # floaters per trip
+    d_port:                float = 10.0      # km distance to port
+    c_inst_intcab:         float = 0.115     # millions/km internal cable
+    c_inst_expcab:         float = 0.637     # millions/km export cable
+    c_inst_offsub:         float = 20.0      # millions (offshore substation)
+    c_inst_moo_per_turb:   float = 0.24      # millions per turbine
+
+    # Decommissioning (salvage value, negative)
+    r_dec:                 float = 0.23      # millions/MW
+
+    # OPEX (annual, per turbine)
+    opex_1wt:              float = 1.965     # 0.131 * 15 MW (Myhr model)

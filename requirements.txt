@@ -1,0 +1,7 @@
+cupy-cuda12x
+numpy
+scipy
+matplotlib
+pytest
+h5py
+hdf5plugin

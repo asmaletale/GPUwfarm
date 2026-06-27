@@ -27,7 +27,7 @@ def _pareto_mask_2d(objectives: np.ndarray) -> np.ndarray:
     obj_j = objectives[np.newaxis, :, :]   # (1, n, 2)
     dominates_i = np.all(obj_j <= obj_i, axis=2) & np.any(obj_j < obj_i, axis=2)
     np.fill_diagonal(dominates_i, False)
-    return ~dominates_i.any(axis=0)
+    return ~dominates_i.any(axis=1)
 
 
 def _hypervolume_2d(front_obj: np.ndarray, ref: np.ndarray) -> float:

@@ -8,13 +8,14 @@ Multi-objective support: Pareto-based selection with crowding distance.
 Full generation history logged for post-processing and convergence analysis.
 
 Operators:
-    init   → uniform random initialisation
-    project → feasibility repair (projection chain)
-    evaluate → FarmEvaluator.evaluate()
+    init      → uniform random initialisation
+    project   → feasibility repair (projection chain)
+    evaluate  → FarmEvaluator.evaluate()
     evaluate_objectives → ObjectiveEvaluator.compute_lcoe_batch()
-    select  → Pareto-based (rank + crowding distance)
-    mutate  → Gaussian perturbation with clipping
-    elitism → preserve top-k Pareto-front individuals
+    select    → Pareto-based (rank + crowding distance)
+    crossover → whole-turbine uniform crossover
+    mutate    → Gaussian perturbation with clipping
+    elitism   → preserve top-k Pareto-front individuals
 """
 from __future__ import annotations
 import numpy as np
@@ -119,6 +120,46 @@ class GeneticAlgorithm:
         P = self.ga_cfg.pop_size
         idx = cp.argsort(fitness)[-P:]
         return pop[idx]
+
+    def crossover(self, pop: cp.ndarray) -> cp.ndarray:
+        """
+        Whole-turbine uniform crossover.
+
+        Randomly pairs individuals; each pair crosses over with probability
+        crossover_rate. Within a crossing pair, each turbine is independently
+        drawn from either parent with 50 % probability — (x, y, yaw) is kept
+        together so spatial coherence is preserved.
+        An odd individual (when P is odd) passes through unchanged.
+        """
+        P, T, _ = pop.shape
+        rate      = self.ga_cfg.crossover_rate
+        gene_rate = self.ga_cfg.gene_swap_rate or (1.0 / T)  # default: 1/T → ~1 swap/pair
+
+        # Shuffle population so pairing is random each generation
+        order = cp.random.permutation(P)
+        pop = pop[order]
+
+        n_pairs = P // 2
+        idx_a = cp.arange(0, 2 * n_pairs, 2)  # even positions
+        idx_b = cp.arange(1, 2 * n_pairs, 2)  # odd positions
+
+        # (n_pairs, 1) bool — which pairs actually cross over
+        do_cross = (cp.random.rand(n_pairs) < rate)[:, cp.newaxis]
+
+        # (n_pairs, T) bool — which turbines swap between parents
+        # gene_rate controls how many turbines exchange per pair;
+        # 1/T keeps spatial structure largely intact (≈1 turbine swapped on average)
+        swap = (cp.random.rand(n_pairs, T) < gene_rate) & do_cross
+        swap3 = swap[:, :, cp.newaxis]  # (n_pairs, T, 1) — broadcasts over dim 3
+
+        a = pop[idx_a]  # (n_pairs, T, 3)
+        b = pop[idx_b]  # (n_pairs, T, 3)
+
+        pop = pop.copy()
+        pop[idx_a] = cp.where(swap3, b, a)
+        pop[idx_b] = cp.where(swap3, a, b)
+
+        return pop
 
     def mutate(self, pop: cp.ndarray) -> cp.ndarray:
         """Gaussian mutation on positions and yaw angles."""
@@ -398,7 +439,8 @@ class GeneticAlgorithm:
 
                     pop = self.select(pop, aep)
 
-                # Mutation
+                # Crossover → Mutation
+                pop = self.crossover(pop)
                 pop = self.mutate(pop)
 
                 # Project mutated offspring — elites are reinserted after this so

@@ -18,9 +18,9 @@ Physics sources:
 #todo: add bathymetry
 #todo: include option to switch off yaw optimization (only layout) or switch off layout optimization (only yaw)
 #todo: visualize min lcoe and min vi layouts on the pareto front
-#todo:add wake visualization like in floris (wake velocity deficit, turbulence intensity, etc.)
+#todo: add wake visualization like in floris (wake velocity deficit, turbulence intensity)
 #todo: add rotor discretization (like in floris) to have more accurate wake modeling and power calculation
-#todo: change the logic of running the mo optimization by providing coupled objective string
+
 from __future__ import annotations
 import argparse
 import os

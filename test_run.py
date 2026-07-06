@@ -28,7 +28,7 @@ farm_cfg     = FarmConfig(n_turbines=N_TURB)
 wake_cfg     = WakeConfig(combination="SOSFS")
 turbine_cfg  = TurbineConfig()
 turbine_data = TurbineData.nrel_5mw()
-ga_cfg       = GAConfig(pop_size=POP, n_generations=GENS)
+ga_cfg       = GAConfig(pop_size=POP, n_generations=GENS, crossover_rate=0)
 wind_rose    = WindRose.default_12sector()
 
 # ── wind rose plot ───────────────────────────────────────────────────

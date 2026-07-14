@@ -21,19 +21,16 @@ from physics.turbine.power_curve import TurbineData
 from wind.wind_rose import WindRose
 
 
-_COMBINATION_MAP = {
-    "sosfs": "SOSFS",
-    "freestream_linear_superposition": "FLS",
-    "maximum_velocity_deficit": "MAX",
-}
-
-
 def _resolve_turbine_path(turbine_type: str, yaml_dir: pathlib.Path) -> pathlib.Path | None:
-    # 1. local turbine_library/ next to the input YAML
+    # 1. flat file next to the input YAML (e.g. examples/nrel_5MW.yaml)
+    flat = yaml_dir / f"{turbine_type}.yaml"
+    if flat.exists():
+        return flat
+    # 2. local turbine_library/ next to the input YAML
     local = yaml_dir / "turbine_library" / f"{turbine_type}.yaml"
     if local.exists():
         return local
-    # 2. FLORIS package turbine library (if floris is installed)
+    # 3. FLORIS package turbine library (if floris is installed)
     try:
         from floris import FlorisModel
         import inspect
@@ -54,23 +51,7 @@ def _load_turbine(turbine_type: str, yaml_dir: pathlib.Path) -> tuple[TurbineCon
     with open(path) as f:
         t = yaml.safe_load(f)
 
-    turbine_cfg = TurbineConfig(
-        rotor_diameter=float(t["rotor_diameter"]),
-        hub_height=float(t["hub_height"]),
-        cosine_loss_exponent_yaw=float(
-            t.get("power_thrust_table", {}).get("cosine_loss_exponent_yaw", 1.88)
-        ),
-    )
-
-    pt = t["power_thrust_table"]
-    turbine_data = TurbineData(
-        wind_speeds=np.array(pt["wind_speed"], dtype=np.float32),
-        power_kw=np.array(pt["power"], dtype=np.float32),
-        ct_values=np.array(pt["thrust_coefficient"], dtype=np.float32),
-        ref_air_density=float(pt.get("ref_air_density", 1.225)),
-        cosine_loss_exponent_yaw=float(pt.get("cosine_loss_exponent_yaw", 1.88)),
-    )
-    return turbine_cfg, turbine_data
+    return TurbineConfig.from_turbine_dict(t), TurbineData.from_turbine_yaml(path)
 
 
 def load_floris_yaml(path: str | pathlib.Path) -> dict:
@@ -107,7 +88,7 @@ def load_floris_yaml(path: str | pathlib.Path) -> dict:
 
     # ── Flow field ────────────────────────────────────────────────────────────
     ff = cfg["flow_field"]
-    air_density = float(ff.get("air_density", 1.225))
+    air_density = float(ff.get("air_density", FarmConfig().air_density))
 
     # In FLORIS v4 each element of these three lists is one simulation condition
     # (they are not a grid — they are paired).
@@ -151,29 +132,7 @@ def load_floris_yaml(path: str | pathlib.Path) -> dict:
     )
 
     # ── Wake config ───────────────────────────────────────────────────────────
-    wake = cfg.get("wake", {})
-    model_strings = wake.get("model_strings", {})
-    combo_raw = model_strings.get("combination_model", "sosfs").lower()
-    combination = _COMBINATION_MAP.get(combo_raw, "SOSFS")
-
-    vel_p  = wake.get("wake_velocity_parameters",  {}).get("gauss", {})
-    def_p  = wake.get("wake_deflection_parameters", {}).get("gauss", {})
-    turb_p = wake.get("wake_turbulence_parameters", {}).get("crespo_hernandez", {})
-
-    wake_cfg = WakeConfig(
-        combination=combination,
-        alpha=float(vel_p.get("alpha", 0.58)),
-        beta =float(vel_p.get("beta",  0.077)),
-        ka   =float(vel_p.get("ka",    0.38)),
-        kb   =float(vel_p.get("kb",    0.004)),
-        ad   =float(def_p.get("ad",    0.0)),
-        bd   =float(def_p.get("bd",    0.0)),
-        dm   =float(def_p.get("dm",    1.0)),
-        ch_initial   =float(turb_p.get("initial",    0.1)),
-        ch_constant  =float(turb_p.get("constant",   0.9)),
-        ch_ai        =float(turb_p.get("ai",         0.8)),
-        ch_downstream=float(turb_p.get("downstream", -0.32)),
-    )
+    wake_cfg = WakeConfig.from_wake_dict(cfg.get("wake", {}))
 
     # ── Turbine ───────────────────────────────────────────────────────────────
     turbine_types = cfg["farm"].get("turbine_type", ["nrel_5MW"])

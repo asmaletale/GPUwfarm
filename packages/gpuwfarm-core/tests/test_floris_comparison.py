@@ -122,7 +122,7 @@ def _load_floris_turbine_data():
     Using this table in both FLORIS and our evaluator equalises the power-curve
     so any remaining error comes purely from wake physics differences.
     """
-    from physics.turbine.power_curve import TurbineData
+    from gpuwfarm_core.physics.turbine.power_curve import TurbineData
 
     fpath = pathlib.Path(inspect.getfile(_FM)).parent
     import yaml
@@ -195,8 +195,8 @@ def _floris_farm_power_kw(fm, wd_met, ws, ti):
 # ── our evaluator builder ─────────────────────────────────────────────────────
 
 def _our_evaluator(n_turbines, turbine_data=None):
-    from config import WakeConfig, FarmConfig, TurbineConfig
-    from physics.farm_evaluator import FarmEvaluator
+    from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig
+    from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
 
     wake_cfg    = WakeConfig(combination="SOSFS")
     farm_cfg    = FarmConfig(n_turbines=n_turbines, air_density=1.225, ti_ambient=TI_AMB)
@@ -209,7 +209,7 @@ def _our_farm_power_kw(layout_x, layout_y, turbine_data=None):
     Run our evaluator for a single wind condition (wd=0°, blows +x).
     Returns total farm power in kW.
     """
-    from wind.wind_rose import WindRose
+    from gpuwfarm_core.wind.wind_rose import WindRose
 
     n = len(layout_x)
     ev = _our_evaluator(n, turbine_data)
@@ -273,7 +273,7 @@ class TestFreestreamPowerAgreement:
             fm.run()
             p_floris = fm.get_turbine_powers()[0, 0] / 1000.0   # kW
 
-            from wind.wind_rose import WindRose
+            from gpuwfarm_core.wind.wind_rose import WindRose
             ev = _our_evaluator(1, td)
             pop = cp.zeros((1, 1, 3), dtype=cp.float32)
             rose = WindRose.from_uniform_ti(
@@ -387,7 +387,7 @@ class TestAEPWindRose:
 
     def test_aep_2turbine_aligned_single_direction(self):
         """AEP for 2-turbine aligned row over Weibull speeds, single direction."""
-        from wind.wind_rose import WindRose
+        from gpuwfarm_core.wind.wind_rose import WindRose
 
         speeds = np.arange(3.0, 25.0, 1.0, dtype=np.float32)   # 22 bins
         freqs  = self._weibull_freq(speeds).astype(np.float32)
@@ -434,7 +434,7 @@ class TestAEPWindRose:
         Since there is no wake, both should agree within 1 % of each other
         and also match the analytic integral of P(ws)*f(ws)*8760.
         """
-        from wind.wind_rose import WindRose
+        from gpuwfarm_core.wind.wind_rose import WindRose
 
         speeds = np.arange(3.0, 25.0, 1.0, dtype=np.float32)
         freqs  = self._weibull_freq(speeds).astype(np.float32)

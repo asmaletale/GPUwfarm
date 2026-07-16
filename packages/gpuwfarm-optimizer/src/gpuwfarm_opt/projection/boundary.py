@@ -6,7 +6,7 @@ interface, supporting arbitrary rectangular boundaries.
 """
 from __future__ import annotations
 import cupy as cp
-from projection.base import ProjectionOperator
+from gpuwfarm_opt.projection.base import ProjectionOperator
 from gpuwfarm_core.config import FarmConfig
 
 

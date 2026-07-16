@@ -1,16 +1,20 @@
 """Smoke tests for the 7 multi-objective bug fixes."""
 import sys, os
-sys.path.insert(0, os.path.dirname(__file__))
-os.add_dll_directory(os.path.normpath(
-    os.path.join(sys.executable, "..", "..", "Lib", "site-packages", "torch", "lib")
-))
+# On Windows without a full CUDA toolkit, PyTorch ships the CUDA DLLs CuPy
+# needs; register that directory before CuPy is imported. No-op elsewhere.
+if sys.platform == "win32":
+    _torch_lib = os.path.normpath(
+        os.path.join(sys.executable, "..", "..", "Lib", "site-packages", "torch", "lib")
+    )
+    if os.path.isdir(_torch_lib):
+        os.add_dll_directory(_torch_lib)
 
 import numpy as np
 import cupy as cp
 
 from gpuwfarm_core.config import FarmConfig, TurbineConfig, CostConfig
 from gpuwfarm_core.objectives import ObjectiveEvaluator
-from optimizer.genetic import GeneticAlgorithm
+from gpuwfarm_opt.genetic import GeneticAlgorithm
 
 
 def test_fixed_costs_and_lcoe_batch():
@@ -63,11 +67,11 @@ def test_pareto_select_no_dth():
     pop = cp.ones((4, 3, 3), dtype=cp.float32)
     obj = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 1.5], [2.5, 2.5]])
 
-    from config import GAConfig
+    from gpuwfarm_opt.config import GAConfig
     from gpuwfarm_core.config import WakeConfig
     from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
     from gpuwfarm_core.physics.turbine.power_curve import TurbineData
-    from projection.base import CompositeProjection
+    from gpuwfarm_opt.projection.base import CompositeProjection
     from gpuwfarm_core.wind.wind_rose import WindRose
 
     farm_cfg = FarmConfig(n_turbines=3)

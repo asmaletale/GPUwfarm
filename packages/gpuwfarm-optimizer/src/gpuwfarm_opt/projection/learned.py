@@ -13,7 +13,7 @@ Plug in any model that implements forward(x: cp.ndarray) -> cp.ndarray.
 """
 from __future__ import annotations
 import cupy as cp
-from projection.base import ProjectionOperator
+from gpuwfarm_opt.projection.base import ProjectionOperator
 from typing import Protocol, runtime_checkable
 
 

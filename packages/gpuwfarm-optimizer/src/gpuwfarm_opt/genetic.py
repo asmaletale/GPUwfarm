@@ -23,12 +23,12 @@ import cupy as cp
 from typing import List
 
 from gpuwfarm_core.config import FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
-from config import GAConfig
+from gpuwfarm_opt.config import GAConfig
 from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
 from gpuwfarm_core.objectives import ObjectiveEvaluator
-from projection.base import ProjectionOperator
+from gpuwfarm_opt.projection.base import ProjectionOperator
 from gpuwfarm_core.wind.wind_rose import WindRose
-from optimizer.population_logger import AsyncPopulationLogger
+from gpuwfarm_opt.population_logger import AsyncPopulationLogger
 
 
 class GeneticAlgorithm:

@@ -9,7 +9,7 @@ ProjectionOperator interface with configurable passes.
 """
 from __future__ import annotations
 import cupy as cp
-from physics.base import ProjectionOperator
+from projection.base import ProjectionOperator
 from config import FarmConfig
 
 

@@ -9,7 +9,19 @@ from abc import ABC, abstractmethod
 from typing import List
 import cupy as cp
 
-from physics.base import ProjectionOperator
+
+class ProjectionOperator(ABC):
+    """Maps a population of layouts to the feasible set."""
+
+    @abstractmethod
+    def project(self, pop: cp.ndarray) -> cp.ndarray:
+        """
+        Args:
+            pop: (P, T, 2) positions [x, y] on GPU
+        Returns:
+            (P, T, 2) corrected positions
+        """
+        ...
 
 
 class CompositeProjection(ProjectionOperator):

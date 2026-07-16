@@ -13,7 +13,7 @@ Plug in any model that implements forward(x: cp.ndarray) -> cp.ndarray.
 """
 from __future__ import annotations
 import cupy as cp
-from physics.base import ProjectionOperator
+from projection.base import ProjectionOperator
 from typing import Protocol, runtime_checkable
 
 

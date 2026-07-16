@@ -25,7 +25,7 @@ from typing import List
 from config import FarmConfig, GAConfig, CostConfig, TurbineConfig, VisualImpactConfig
 from physics.farm_evaluator import FarmEvaluator
 from physics.objectives import ObjectiveEvaluator
-from physics.base import ProjectionOperator
+from projection.base import ProjectionOperator
 from wind.wind_rose import WindRose
 from optimizer.population_logger import AsyncPopulationLogger
 

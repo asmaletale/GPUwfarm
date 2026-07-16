@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import cupy as cp
 from typing import List
-from physics.base import ProjectionOperator
+from projection.base import ProjectionOperator
 
 
 def _point_in_polygon(px: float, py: float, poly: np.ndarray) -> bool:

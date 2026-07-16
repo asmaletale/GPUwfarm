@@ -9,8 +9,8 @@ from __future__ import annotations
 import numpy as np
 import cupy as cp
 
-from config import FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
-from wind.wind_rose import WindRose
+from gpuwfarm_core.config import FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
+from gpuwfarm_core.wind.wind_rose import WindRose
 
 
 class ObjectiveEvaluator:

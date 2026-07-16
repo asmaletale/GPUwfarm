@@ -3,9 +3,9 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 import numpy as np
-from config import FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
-from wind.wind_rose import WindRose
-from physics.objectives import ObjectiveEvaluator
+from gpuwfarm_core.config import FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
+from gpuwfarm_core.wind.wind_rose import WindRose
+from gpuwfarm_core.objectives import ObjectiveEvaluator
 
 farm_cfg    = FarmConfig(n_turbines=3)
 turbine_cfg = TurbineConfig(rotor_diameter=120.0, hub_height=90.0)

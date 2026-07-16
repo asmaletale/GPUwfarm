@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(not _HAS_GPU, reason="CuPy not available")
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from physics.turbine.power_curve import TabulatedPowerCurve, TurbineData
+from gpuwfarm_core.physics.turbine.power_curve import TabulatedPowerCurve, TurbineData
 
 
 class TestTabulatedPowerCurve:

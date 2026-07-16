@@ -21,15 +21,15 @@ from __future__ import annotations
 import numpy as np
 import cupy as cp
 
-from config import WakeConfig, FarmConfig, TurbineConfig
-from physics.wake_turbulence.crespo_hernandez import CrespoHernandez
-from physics.wake_deflection.gauss import GaussVelocityDeflection
-from physics.wake_velocity.gauss import GaussVelocityDeficit
-from physics.wake_combination.sosfs import SOSFS
-from physics.wake_combination.fls import FLS
-from physics.wake_combination.max import MAX
-from physics.turbine.power_curve import TabulatedPowerCurve, TurbineData
-from wind.wind_rose import WindRose
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig
+from gpuwfarm_core.physics.wake_turbulence.crespo_hernandez import CrespoHernandez
+from gpuwfarm_core.physics.wake_deflection.gauss import GaussVelocityDeflection
+from gpuwfarm_core.physics.wake_velocity.gauss import GaussVelocityDeficit
+from gpuwfarm_core.physics.wake_combination.sosfs import SOSFS
+from gpuwfarm_core.physics.wake_combination.fls import FLS
+from gpuwfarm_core.physics.wake_combination.max import MAX
+from gpuwfarm_core.physics.turbine.power_curve import TabulatedPowerCurve, TurbineData
+from gpuwfarm_core.wind.wind_rose import WindRose
 
 
 _COMBINATION_CLASSES = {"SOSFS": SOSFS, "FLS": FLS, "MAX": MAX}

@@ -21,8 +21,8 @@ pytestmark = pytest.mark.skipif(not _HAS_GPU, reason="CuPy not available")
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import WakeConfig
-from physics.wake_velocity.gauss import GaussVelocityDeficit
+from gpuwfarm_core.config import WakeConfig
+from gpuwfarm_core.physics.wake_velocity.gauss import GaussVelocityDeficit
 
 
 D    = 120.0

@@ -41,15 +41,16 @@ import numpy as np
 import cupy as cp
 import matplotlib.pyplot as plt
 
-from config import WakeConfig, FarmConfig, GAConfig, TurbineConfig, CostConfig, VisualImpactConfig
-from physics.farm_evaluator import FarmEvaluator
-from physics.turbine.power_curve import TurbineData
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
+from config import GAConfig
+from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
+from gpuwfarm_core.physics.turbine.power_curve import TurbineData
 from projection.base import CompositeProjection
 from projection.spacing import PairwiseSpacingProjection
 from projection.boundary import BoundaryProjection
 from optimizer.genetic import GeneticAlgorithm
-from wind.wind_rose import WindRose
-from loaders.floris_yaml import load_floris_yaml
+from gpuwfarm_core.wind.wind_rose import WindRose
+from gpuwfarm_core.loaders.floris_yaml import load_floris_yaml
 
 
 # ──────────────────────────────────────────────────────────────────────

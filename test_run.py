@@ -12,14 +12,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cupy as cp
 
-from config import WakeConfig, FarmConfig, GAConfig, TurbineConfig, CostConfig, VisualImpactConfig
-from physics.farm_evaluator import FarmEvaluator
-from physics.turbine.power_curve import TurbineData
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
+from config import GAConfig
+from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
+from gpuwfarm_core.physics.turbine.power_curve import TurbineData
 from projection.base import CompositeProjection
 from projection.spacing import PairwiseSpacingProjection
 from projection.boundary import BoundaryProjection
 from optimizer.genetic import GeneticAlgorithm
-from wind.wind_rose import WindRose
+from gpuwfarm_core.wind.wind_rose import WindRose
 from analyze_history import load_mo_convergence
 
 N_TURB, POP, GENS = 10, 200, 200

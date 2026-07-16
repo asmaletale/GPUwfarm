@@ -14,7 +14,7 @@ GPU deviation: np.maximum replaced with CuPy reduction.
 """
 from __future__ import annotations
 import cupy as cp
-from physics.base import BaseWakeCombination
+from gpuwfarm_core.physics.base import BaseWakeCombination
 
 
 class MAX(BaseWakeCombination):

@@ -20,9 +20,9 @@ pytestmark = pytest.mark.skipif(not _HAS_GPU, reason="CuPy not available")
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from physics.wake_combination.sosfs import SOSFS
-from physics.wake_combination.fls import FLS
-from physics.wake_combination.max import MAX
+from gpuwfarm_core.physics.wake_combination.sosfs import SOSFS
+from gpuwfarm_core.physics.wake_combination.fls import FLS
+from gpuwfarm_core.physics.wake_combination.max import MAX
 
 
 def _deficits(d1: float, d2: float) -> cp.ndarray:

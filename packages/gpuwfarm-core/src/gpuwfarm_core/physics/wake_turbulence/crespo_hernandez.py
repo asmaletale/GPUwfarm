@@ -18,8 +18,8 @@ GPU deviation from FLORIS:
 """
 from __future__ import annotations
 import cupy as cp
-from physics.base import BaseWakeTurbulence
-from config import WakeConfig
+from gpuwfarm_core.physics.base import BaseWakeTurbulence
+from gpuwfarm_core.config import WakeConfig
 
 
 class CrespoHernandez(BaseWakeTurbulence):

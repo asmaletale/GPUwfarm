@@ -19,8 +19,8 @@ GPU deviation from FLORIS:
 from __future__ import annotations
 import numpy as np
 import cupy as cp
-from physics.base import BaseWakeDeflection
-from config import WakeConfig
+from gpuwfarm_core.physics.base import BaseWakeDeflection
+from gpuwfarm_core.config import WakeConfig
 
 
 class GaussVelocityDeflection(BaseWakeDeflection):

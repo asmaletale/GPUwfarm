@@ -23,10 +23,10 @@ pytestmark = pytest.mark.skipif(not _HAS_GPU, reason="CuPy not available")
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import WakeConfig, FarmConfig, TurbineConfig
-from wind.wind_rose import WindRose
-from physics.farm_evaluator import FarmEvaluator
-from physics.turbine.power_curve import TurbineData
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig
+from gpuwfarm_core.wind.wind_rose import WindRose
+from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
+from gpuwfarm_core.physics.turbine.power_curve import TurbineData
 
 
 class TestWindRose:

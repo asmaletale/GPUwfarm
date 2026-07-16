@@ -8,8 +8,8 @@ os.add_dll_directory(os.path.normpath(
 import numpy as np
 import cupy as cp
 
-from config import FarmConfig, TurbineConfig, CostConfig
-from physics.objectives import ObjectiveEvaluator
+from gpuwfarm_core.config import FarmConfig, TurbineConfig, CostConfig
+from gpuwfarm_core.objectives import ObjectiveEvaluator
 from optimizer.genetic import GeneticAlgorithm
 
 
@@ -63,11 +63,12 @@ def test_pareto_select_no_dth():
     pop = cp.ones((4, 3, 3), dtype=cp.float32)
     obj = np.array([[1.0, 1.0], [2.0, 2.0], [3.0, 1.5], [2.5, 2.5]])
 
-    from config import GAConfig, WakeConfig
-    from physics.farm_evaluator import FarmEvaluator
-    from physics.turbine.power_curve import TurbineData
+    from config import GAConfig
+    from gpuwfarm_core.config import WakeConfig
+    from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
+    from gpuwfarm_core.physics.turbine.power_curve import TurbineData
     from projection.base import CompositeProjection
-    from wind.wind_rose import WindRose
+    from gpuwfarm_core.wind.wind_rose import WindRose
 
     farm_cfg = FarmConfig(n_turbines=3)
     ga_cfg   = GAConfig(pop_size=4, n_generations=1)

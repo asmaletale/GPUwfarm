@@ -14,10 +14,10 @@ except ImportError:
     print("Warning: FLORIS not available. Skipping legacy comparison.")
 
 import cupy as cp
-from config import WakeConfig, FarmConfig, TurbineConfig, CostConfig
-from physics.farm_evaluator import FarmEvaluator
-from physics.turbine.power_curve import TurbineData
-from wind.wind_rose import WindRose
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig, CostConfig
+from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
+from gpuwfarm_core.physics.turbine.power_curve import TurbineData
+from gpuwfarm_core.wind.wind_rose import WindRose
 
 
 def get_test_layout(n_turbines: int = 9) -> np.ndarray:

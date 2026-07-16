@@ -24,10 +24,10 @@ if sys.platform == "win32":
 import numpy as np
 import cupy as cp
 
-from config import WakeConfig, FarmConfig, TurbineConfig
-from physics.farm_evaluator import FarmEvaluator
-from physics.turbine.power_curve import TurbineData
-from wind.wind_rose import WindRose
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig
+from gpuwfarm_core.physics.farm_evaluator import FarmEvaluator
+from gpuwfarm_core.physics.turbine.power_curve import TurbineData
+from gpuwfarm_core.wind.wind_rose import WindRose
 
 
 # ─────────────────────────────────────────────────────────────────────────────

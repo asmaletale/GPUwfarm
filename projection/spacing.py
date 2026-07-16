@@ -10,7 +10,7 @@ ProjectionOperator interface with configurable passes.
 from __future__ import annotations
 import cupy as cp
 from projection.base import ProjectionOperator
-from config import FarmConfig
+from gpuwfarm_core.config import FarmConfig
 
 
 class PairwiseSpacingProjection(ProjectionOperator):

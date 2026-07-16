@@ -16,9 +16,9 @@ import pathlib
 import numpy as np
 import yaml
 
-from config import WakeConfig, FarmConfig, TurbineConfig
-from physics.turbine.power_curve import TurbineData
-from wind.wind_rose import WindRose
+from gpuwfarm_core.config import WakeConfig, FarmConfig, TurbineConfig
+from gpuwfarm_core.physics.turbine.power_curve import TurbineData
+from gpuwfarm_core.wind.wind_rose import WindRose
 
 
 _COMBINATION_MAP = {

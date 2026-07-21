@@ -39,17 +39,22 @@ FLORIS configuration used in every test
 
 Known residual deviations (see CLAUDE.md)
 -----------------------------------------
-  1. FLORIS evaluates turbines sequentially (sorted downstream); ours
-     evaluates all pairs simultaneously.  For a 2-turbine case the TI
-     feedback from the downstream turbine cannot affect the upstream one,
-     so the approaches give the same result.  For N>2 turbines, our TI
-     estimate for turbine k is the RSS of all added-TI contributions from
-     ALL turbines, whereas FLORIS only includes contributions from upstream
-     turbines already processed.  This can cause a few percent difference
-     in effective TI, and therefore in sigma evolution.
-  2. Our TI carries the *source* turbine's TI into sigma expansion, while
-     FLORIS carries the *destination* turbine's TI.  Both are approximations
-     to the local TI at each point along the wake centreline.
+  1. FLORIS evaluates turbines sequentially (sorted downstream) and
+     recomputes each turbine's Ct/axial-induction from its true LOCAL
+     (already-waked) inflow speed before using it as a wake source. We
+     evaluate all pairs simultaneously and compute every source turbine's
+     Ct/axial-induction from FREESTREAM speed (farm_evaluator.py step 3),
+     so a turbine's own waking is not reflected in the wake IT generates
+     downstream. This only affects turbines with >=1 turbine upstream of
+     THEM that also has turbines further downstream (e.g. the middle
+     turbine of a 3-turbine row) -- verified to cause ~5% single-condition
+     power error and up to ~20% AEP error on the affected turbine, with
+     zero effect on turbines whose sources are all unwaked (e.g. any
+     2-turbine case, or the first two turbines of a longer row).
+
+     (An earlier version of this note also blamed RSS-vs-sequential TI
+     combination for the residual; verified NOT to matter here -- swapping
+     the combination method made zero difference on this layout.)
 
 Tolerances
 ----------

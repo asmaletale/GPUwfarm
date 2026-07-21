@@ -125,6 +125,20 @@ AEP          (P,)        — fitness value
 
 ## Physics Parameters (FLORIS defaults)
 
+`WakeConfig`, `TurbineConfig`, and `FarmConfig.air_density`/`ti_ambient` in
+`gpuwfarm_core/config.py` do **not** hardcode these numbers — they are
+`field(default_factory=...)` values parsed at import time from
+`examples/gch.yaml` (farm/wake) and `examples/nrel_5MW.yaml` (turbine,
+FLORIS's own file). `gpuwfarm_core/loaders/floris_yaml.py` parses a
+user-supplied YAML through the exact same `WakeConfig.from_wake_dict` /
+`TurbineConfig.from_turbine_dict` classmethods, so `WakeConfig()` and loading
+`examples/gch.yaml` always agree. To change a default, edit the YAML, not
+config.py. The same pattern applies to `CostConfig` (from `examples/costs.yaml`)
+and `VisualImpactConfig` (from `examples/visual_impact.yaml`) via
+`from_costs_dict`/`from_vi_dict`. Each YAML is kept separate on purpose — one
+concern per file (mirrors FLORIS's own farm-input vs. turbine-library split) —
+do not merge them into a single config file.
+
 ```python
 # Gauss wake / deflection
 alpha = 0.58, beta = 0.077, ka = 0.38, kb = 0.004
@@ -139,7 +153,7 @@ initial = 0.1, constant = 0.9, ai = 0.8, downstream = -0.32
 ## Known Deviations from FLORIS
 
 1. **Hub-height point evaluation only** — FLORIS evaluates on a 3D mesh. We evaluate only at hub height. Standard for layout optimization.
-2. **Simultaneous all-pairs** — FLORIS sorts turbines downstream and evaluates sequentially. We broadcast all pairs at once for GPU vectorization.
+2. **Simultaneous all-pairs** — FLORIS sorts turbines downstream and evaluates sequentially, recomputing each turbine's Ct/axial-induction from its true local (waked) inflow before using it as a wake source. We broadcast all pairs at once for GPU vectorization and compute every source turbine's Ct/axial-induction from freestream speed instead — verified (`tests/test_floris_comparison.py`) to cause ~5% power / ~20% AEP error on turbines that sit downstream of an already-waked turbine (e.g. the last turbine in a row of 3+); turbines whose sources are all unwaked are unaffected.
 3. **No wind veer** — Zero wind veer (2D model). Fully 3D wind veer can be added.
 4. **CuPy instead of numexpr** — All `ne.evaluate(...)` calls replaced with CuPy broadcasting.
 5. **No Cumulative Gauss Curl** — Architecture supports it via plug-in interface; implementation deferred (CGC requires iterative solver incompatible with batch GA).

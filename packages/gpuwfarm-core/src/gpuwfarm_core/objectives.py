@@ -1,9 +1,16 @@
 """
 Multi-objective functions: LCOE, costs, and visual impact.
 
-All calculations operate on numpy/cupy tensors for batch evaluation.
+The batch paths used by the GA every generation -- compute_lcoe_batch() and
+compute_vi_batch() (+ its _rectangle_union_area_batch() helper) -- are CuPy-
+native: they accept and return GPU-resident (P,) / (P, T) tensors so the
+optimizer never has to drop back to NumPy/CPU to score a population.
+
+compute_visual_impact() and _rectangle_union_area() are the single-layout
+NumPy reference/smoke-test path (see smoke/vi.py) -- not on the GA hot path,
+kept on CPU intentionally since they process one layout at a time.
+
 Costs use simplified LCOE model (no derating).
-Visual impact is stubbed; CPU implementation deferred.
 """
 from __future__ import annotations
 import numpy as np
@@ -244,11 +251,14 @@ class ObjectiveEvaluator:
     def compute_lcoe_batch(
         self,
         n_turbines: int,
-        aep_gwh: np.ndarray,
-        cable_length_km: np.ndarray,
-    ) -> np.ndarray:
+        aep_gwh: cp.ndarray,
+        cable_length_km: cp.ndarray,
+    ) -> cp.ndarray:
         """
-        Vectorized LCOE over a population batch.
+        Vectorized LCOE over a population batch. GPU-resident: aep_gwh and
+        cable_length_km are expected to already be CuPy arrays (as produced by
+        FarmEvaluator.evaluate() / GeneticAlgorithm.compute_objectives()), so
+        the GA never has to drop back to NumPy to score a population.
 
         Args:
             n_turbines:       number of turbines (scalar, same for all individuals)
@@ -260,9 +270,11 @@ class ObjectiveEvaluator:
         """
         fixed, per_km = self._fixed_costs(n_turbines)
         total_costs = fixed + cable_length_km * per_km        # (P,) M EUR
-        with np.errstate(divide="ignore", invalid="ignore"):
-            lcoe = np.where(aep_gwh > 0, total_costs / aep_gwh, np.inf)
-        return lcoe.astype(np.float32)
+        # Avoid the division-by-zero warning path entirely rather than relying on
+        # a NumPy-only errstate context (CuPy has no direct equivalent).
+        safe_aep = cp.where(aep_gwh > 0, aep_gwh, cp.float32(1.0))
+        lcoe = cp.where(aep_gwh > 0, total_costs / safe_aep, cp.float32(np.inf))
+        return lcoe.astype(cp.float32)
 
     # ──────────────────────────────────────────────────────────────────
     # Visual impact
@@ -299,12 +311,14 @@ class ObjectiveEvaluator:
 
     @staticmethod
     def _rectangle_union_area_batch(
-        xiL: np.ndarray,
-        xiR: np.ndarray,
-        ziTot: np.ndarray,
-    ) -> np.ndarray:
+        xiL: cp.ndarray,
+        xiR: cp.ndarray,
+        ziTot: cp.ndarray,
+    ) -> cp.ndarray:
         """
-        Exact skyline union area for P individuals simultaneously.
+        Exact skyline union area for P individuals simultaneously. GPU-resident
+        (CuPy) — this is the batch path called from compute_vi_batch(), on the
+        GA hot loop.
 
         Vectorized equivalent of _rectangle_union_area: sorts event x-values per row,
         then checks coverage with a (P, T, 2T-1) broadcast — no Python loop over P.
@@ -318,10 +332,10 @@ class ObjectiveEvaluator:
             (P,) union area per individual
         """
         # Zero-out invalid turbines so they never win the max
-        H = np.where((xiR > xiL) & (ziTot > 0.0), ziTot, 0.0)
+        H = cp.where((xiR > xiL) & (ziTot > 0.0), ziTot, cp.float32(0.0))
 
         # Sweep-line events: sorted union of left and right edges per individual
-        all_events = np.sort(np.concatenate([xiL, xiR], axis=1), axis=1)  # (P, 2T)
+        all_events = cp.sort(cp.concatenate([xiL, xiR], axis=1), axis=1)  # (P, 2T)
 
         x_lo  = all_events[:, :-1]              # (P, 2T-1)
         x_hi  = all_events[:, 1:]
@@ -332,7 +346,7 @@ class ObjectiveEvaluator:
         covers = (xiL[:, :, None] <= x_mid[:, None, :]) & \
                  (x_mid[:, None, :] < xiR[:, :, None])
 
-        max_h = np.where(covers, H[:, :, None], 0.0).max(axis=1)  # (P, 2T-1)
+        max_h = cp.where(covers, H[:, :, None], cp.float32(0.0)).max(axis=1)  # (P, 2T-1)
         return (max_h * (x_hi - x_lo)).sum(axis=1)                 # (P,)
 
     def compute_visual_impact(
@@ -423,16 +437,20 @@ class ObjectiveEvaluator:
 
     def compute_vi_batch(
         self,
-        x_batch: np.ndarray,
-        y_batch: np.ndarray,
+        x_batch: cp.ndarray,
+        y_batch: cp.ndarray,
         wind_rose: WindRose,
-    ) -> np.ndarray:
+    ) -> cp.ndarray:
         """
         Compute VI for an entire population batch — fully vectorized over P.
+        GPU-resident: x_batch/y_batch are expected to already be CuPy arrays
+        (as sliced straight out of the GA population tensor), so the optimizer
+        never has to transfer the population to NumPy to score VI.
 
-        Replaces the O(P × n_obs × n_wd × T²) Python loop with numpy broadcasts
-        over (P, T) arrays.  The only remaining loops are over observers (n_obs,
-        usually ≤ 5) and wind directions (n_wd, usually 36).
+        Replaces the O(P × n_obs × n_wd × T²) Python loop with CuPy broadcasts
+        over (P, T) tensors.  The only remaining loops are over observers (n_obs,
+        usually ≤ 5) and wind directions (n_wd, usually 36) -- each iteration is
+        one small Python-level step driving a (P, T) GPU op, not a P-sized loop.
 
         Args:
             x_batch:   (P, T) turbine x coordinates
@@ -443,7 +461,7 @@ class ObjectiveEvaluator:
             (P,) VI scores as float32
         """
         P, T = x_batch.shape
-        vi = np.zeros(P, dtype=np.float32)
+        vi = cp.zeros(P, dtype=cp.float32)
         if self.vi_cfg is None:
             return vi
 
@@ -454,10 +472,12 @@ class ObjectiveEvaluator:
         xfov = np.deg2rad(cfg.xfov_deg)
         zfov = np.deg2rad(cfg.zfov_deg)
 
+        # Small (n_wd,) host-side arrays -- cheap to keep as NumPy/Python scalars
+        # driving the outer Python loop below.
         freq_dir = wind_rose.freq_table.sum(axis=1)   # (n_wd,)
         wd_rads  = np.deg2rad(wind_rose.wind_dirs)    # (n_wd,)
 
-        VI = np.zeros(P, dtype=np.float64)
+        VI = cp.zeros(P, dtype=cp.float64)
 
         for obs_xy, weight, obs_h in zip(cfg.obs_coords, cfg.obs_weights, cfg.obs_heights):
             x_obs, y_obs = float(obs_xy[0]), float(obs_xy[1])
@@ -466,30 +486,30 @@ class ObjectiveEvaluator:
             horizon_dist = gamma_hor * R
 
             # All (P, T) geometry — computed once per observer
-            li = np.sqrt((x_batch - x_obs) ** 2 + (y_batch - y_obs) ** 2)
-            li = np.maximum(li, 1.0)
+            li = cp.sqrt((x_batch - x_obs) ** 2 + (y_batch - y_obs) ** 2)
+            li = cp.maximum(li, cp.float32(1.0))
 
             gamma_i = li / R
-            denom   = np.cos(gamma_i - gamma_hor)
-            denom   = np.where(np.abs(denom) < 1e-9, 1e-9, denom)
-            hdi     = np.where(li <= horizon_dist, 0.0, R / denom - R)
+            denom   = cp.cos(gamma_i - gamma_hor)
+            denom   = cp.where(cp.abs(denom) < 1e-9, cp.float32(1e-9), denom)
+            hdi     = cp.where(li <= horizon_dist, cp.float32(0.0), R / denom - R)
 
             zi    = (ht - hdi) / li
             ziTot = zi + D / (2.0 * li)                           # (P, T)
 
-            theta_i = np.arctan2(x_batch - x_obs, y_batch - y_obs)  # (P, T)
+            theta_i = cp.arctan2(x_batch - x_obs, y_batch - y_obs)  # (P, T)
 
             xc = 0.5 * (x_batch.max(axis=1, keepdims=True) + x_batch.min(axis=1, keepdims=True))
             yc = 0.5 * (y_batch.max(axis=1, keepdims=True) + y_batch.min(axis=1, keepdims=True))
-            theta_fv = np.arctan2(xc - x_obs, yc - y_obs)          # (P, 1)
+            theta_fv = cp.arctan2(xc - x_obs, yc - y_obs)          # (P, 1)
 
             xi = theta_i - theta_fv                                # (P, T)
 
-            VI_obs = np.zeros(P, dtype=np.float64)
+            VI_obs = cp.zeros(P, dtype=cp.float64)
 
             for wd_rad, freq_d in zip(wd_rads, freq_dir):
-                phi  = wd_rad - theta_i                            # (P, T)
-                xiD  = D / li * np.abs(np.cos(phi))                # (P, T)
+                phi  = float(wd_rad) - theta_i                     # (P, T)
+                xiD  = D / li * cp.abs(cp.cos(phi))                # (P, T)
                 xiL  = xi - 0.5 * xiD
                 xiR  = xi + 0.5 * xiD
 
@@ -499,4 +519,4 @@ class ObjectiveEvaluator:
             VI += VI_obs * float(weight)
 
         VI /= (xfov * zfov)
-        return VI.astype(np.float32)
+        return VI.astype(cp.float32)

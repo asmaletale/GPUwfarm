@@ -18,13 +18,14 @@ from gpuwfarm_opt.genetic import GeneticAlgorithm
 
 
 def test_fixed_costs_and_lcoe_batch():
+    """compute_lcoe_batch is CuPy-native (GPU-resident, see objectives.py)."""
     oe = ObjectiveEvaluator(FarmConfig(n_turbines=5), TurbineConfig(), CostConfig())
     fixed, per_km = oe._fixed_costs(5)
     assert fixed > 0 and per_km > 0, "costs must be positive"
 
-    aep_gwh  = np.array([100.0, 200.0, 0.0], dtype=np.float32)
-    cable_km = np.array([1.0,   2.0,   1.0], dtype=np.float32)
-    lcoe = oe.compute_lcoe_batch(5, aep_gwh, cable_km)
+    aep_gwh  = cp.array([100.0, 200.0, 0.0], dtype=cp.float32)
+    cable_km = cp.array([1.0,   2.0,   1.0], dtype=cp.float32)
+    lcoe = cp.asnumpy(oe.compute_lcoe_batch(5, aep_gwh, cable_km))
     assert lcoe.shape == (3,), "shape must be (P,)"
     assert np.isinf(lcoe[2]), "zero AEP must give inf LCOE"
     assert lcoe[0] > lcoe[1], "higher AEP → lower LCOE"

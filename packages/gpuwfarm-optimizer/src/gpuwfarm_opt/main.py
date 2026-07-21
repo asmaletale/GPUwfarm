@@ -15,7 +15,6 @@ Physics sources:
     Wind rose / AEP: FLORIS floris/wind_data.py + floris/floris_model.py
 """
 #todo: verify that aep is consistent with floris and that the setup is the same (config-wise)
-#todo: apparently lcoe and vi are not on gpu, check if this is correct and if it can be improved
 #todo: add visualization like in legacy code
 #todo: add bathymetry
 #todo: include option to switch off yaw optimization (only layout) or switch off layout optimization (only yaw)

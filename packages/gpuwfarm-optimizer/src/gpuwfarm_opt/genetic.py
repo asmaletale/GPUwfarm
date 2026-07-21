@@ -196,6 +196,13 @@ class GeneticAlgorithm:
         """
         Compute LCOE and VI objectives for each individual.
 
+        Everything through obj1/vi_vals stays GPU-resident (cable length, LCOE,
+        and VI are all computed with CuPy) -- the only D2H transfer is the final
+        (P,)/(P,) pair below, needed because fast_nondominated_sort/pareto_select
+        do small-matrix Pareto ranking on NumPy. That is a tiny transfer (2*P
+        floats) versus the old per-generation cp.asnumpy(pop)/cp.asnumpy(aep)
+        of the full (P, T, 3) population.
+
         Args:
             pop:  (P, T, 3) population [x, y, yaw]
             aep:  (P,) AEP values in kWh
@@ -206,28 +213,24 @@ class GeneticAlgorithm:
         """
         P, T, _ = pop.shape
 
-        # Single D2H transfer — no per-individual transfers
-        pop_np = cp.asnumpy(pop)
-        aep_np = cp.asnumpy(aep) if isinstance(aep, cp.ndarray) else aep
-
-        x = pop_np[:, :, 0]  # (P, T)
-        y = pop_np[:, :, 1]
+        x = pop[:, :, 0]  # (P, T) cupy
+        y = pop[:, :, 1]
 
         # Vectorized cable length: sum of turbine distances from farm centroid
         center_x = x.mean(axis=1, keepdims=True)  # (P, 1)
         center_y = y.mean(axis=1, keepdims=True)
-        cable_length_km = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2).sum(axis=1) / 1000
+        cable_length_km = cp.sqrt((x - center_x) ** 2 + (y - center_y) ** 2).sum(axis=1) / cp.float32(1000.0)
 
-        aep_gwh = aep_np / 1e6  # kWh → GWh
+        aep_gwh = aep / cp.float32(1e6)  # kWh → GWh
         vi_vals = self.obj_eval.compute_vi_batch(x, y, self.wind_rose)
 
         if self.objectives_mode == "aep_vi":
             # Minimise -AEP (= maximise AEP) and minimise VI
-            obj1 = (-aep_gwh).astype(np.float32)
+            obj1 = (-aep_gwh).astype(cp.float32)
         else:
             obj1 = self.obj_eval.compute_lcoe_batch(T, aep_gwh, cable_length_km)
 
-        return obj1, vi_vals
+        return cp.asnumpy(obj1).astype(np.float32), cp.asnumpy(vi_vals).astype(np.float32)
 
     # ──────────────────────────────────────────────────────────────────
     # Pareto ranking and selection

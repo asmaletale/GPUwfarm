@@ -1,8 +1,14 @@
-"""Smoke-test for the Visual Impact implementation."""
+"""Smoke-test for the Visual Impact implementation.
+
+compute_visual_impact() (single layout) stays NumPy -- it's the CPU reference
+path. compute_vi_batch() is CuPy-native (GPU-resident), so the batch section
+below builds its inputs as CuPy arrays.
+"""
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 import numpy as np
+import cupy as cp
 from gpuwfarm_core.config import FarmConfig, TurbineConfig, CostConfig, VisualImpactConfig
 from gpuwfarm_core.wind.wind_rose import WindRose
 from gpuwfarm_core.objectives import ObjectiveEvaluator
@@ -29,10 +35,10 @@ assert vi > 0, "VI should be positive for non-trivial layout"
 obj_no_vi = ObjectiveEvaluator(farm_cfg, turbine_cfg, cost_cfg, vi_cfg=None)
 assert obj_no_vi.compute_visual_impact(x, y, wr) == 0.0
 
-# Batch: P=4 identical layouts → same VI repeated
-x_batch = np.tile(x, (4, 1))
-y_batch = np.tile(y, (4, 1))
-vi_batch = obj.compute_vi_batch(x_batch, y_batch, wr)
+# Batch: P=4 identical layouts → same VI repeated (compute_vi_batch is CuPy-native)
+x_batch = cp.asarray(np.tile(x, (4, 1)))
+y_batch = cp.asarray(np.tile(y, (4, 1)))
+vi_batch = cp.asnumpy(obj.compute_vi_batch(x_batch, y_batch, wr))
 print(f"Batch VI = {vi_batch}")
 assert vi_batch.shape == (4,), "wrong batch shape"
 assert np.allclose(vi_batch, vi_batch[0]), "identical layouts should give equal VI"

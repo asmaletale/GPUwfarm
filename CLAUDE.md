@@ -242,6 +242,16 @@ C = 1 - sqrt(clip(1 - Ct*cos(yaw) / (8*sigma_y*sigma_z/D²), 0, 1))
 TI_wake = constant * a^ai * TI_amb^initial * (dx/D)^downstream
 TI_eff  = sqrt(TI_amb² + TI_wake²)
 ```
+`TI_wake` per source is only counted toward a destination turbine if it is
+downstream, laterally within `2*D`, and within `15*D` downstream (matches
+FLORIS `solver.py` sequential_solver's wake-added-turbulence area-of-influence
+gating). With multiple upstream sources, `TI_wake` above is the **max** across
+sources, not an RSS sum across sources — FLORIS combines via
+`np.maximum(sqrt(ti_added_i² + TI_amb²), running_TI)` per source, so the
+strongest single wake sets TI, contributions don't stack. On an in-line row
+(one active source per destination at a time) max and RSS-sum agree, which is
+why this only shows up on non-single-chain layouts (see
+`test_floris_comparison.py::TestFullWindRose3x3`).
 
 ### Deflection (far wake)
 ```

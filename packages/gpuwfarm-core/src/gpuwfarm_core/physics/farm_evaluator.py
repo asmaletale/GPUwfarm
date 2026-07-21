@@ -138,13 +138,26 @@ class FarmEvaluator:
                     ambient_ti=ti,
                     rotor_diameter=self.D,
                 )
-                # Zero out upstream contributions
-                ti_added = cp.where(downstream_mask, ti_added, cp.zeros_like(ti_added))
+                # FLORIS (solver.py sequential_solver) only lets a source's added TI
+                # count toward a destination turbine if it is downstream, laterally
+                # within 2D of the source, and within 15D downstream (the wake-added-
+                # turbulence "area of influence"). Without these, sources far off to
+                # the side or long downstream still added TI, over-widening sigma for
+                # every other turbine on non-in-line layouts (e.g. a 3x3 grid).
+                lateral_mask = cp.abs(dy_raw) < cp.float32(2.0 * self.D)
+                range_mask   = dx_raw <= cp.float32(15.0 * self.D)
+                ti_mask = downstream_mask & lateral_mask & range_mask
+                ti_added = cp.where(ti_mask, ti_added, cp.zeros_like(ti_added))
 
-                # Per-turbine effective TI: RSS of ambient + added TI from all upstream srcs
-                # For each destination turbine j: TI_j = sqrt(TI_amb² + Σ_i TI_added[i,j]²)
+                # Per-turbine effective TI: FLORIS combines multiple upstream sources
+                # via max(), not RSS sum (solver.py: `np.maximum(sqrt(ti_added**2 +
+                # ambient**2), running_TI)`, applied per source) -- the strongest single
+                # wake sets the TI, it doesn't stack additively across sources. Since
+                # ti_added >= 0, max_i sqrt(ti_added_i**2 + amb**2) == sqrt(max_i(ti_added_i)**2 + amb**2).
+                # For each destination turbine j: TI_j = sqrt(TI_amb² + max_i TI_added[i,j]²)
+                ti_added_max = cp.max(ti_added, axis=1)   # (P, T_dst)
                 ti_eff_per_dst = cp.sqrt(
-                    cp.float32(ti ** 2) + cp.sum(ti_added ** 2, axis=1)
+                    cp.float32(ti ** 2) + ti_added_max ** 2
                 )  # (P, T_dst)
 
                 # Broadcast: each src turbine i uses the *source* turbine's TI for sigma

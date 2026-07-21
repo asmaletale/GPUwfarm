@@ -56,14 +56,32 @@ Known residual deviations (see CLAUDE.md)
      converge -- bump the constant if validating longer rows.
 
      (An earlier version of this note also blamed RSS-vs-sequential TI
-     combination for the residual; verified NOT to matter here -- swapping
-     the combination method made zero difference on this layout.)
+     combination for the residual; verified NOT to matter *here* -- swapping
+     the combination method made zero difference on this layout, because an
+     in-line row only ever has one active upstream source per destination
+     turbine, so RSS-sum and max agree. It DOES matter on layouts with
+     multiple simultaneous upstream sources -- see #2.)
+
+  2. FLORIS's wake-added-turbulence combination (solver.py sequential_solver)
+     takes the MAX across upstream sources of sqrt(ti_added_i² + ti_amb²),
+     not an RSS sum across sources, and only lets a source contribute if it
+     is downstream, laterally within 2D, and within 15D downstream. This was
+     previously ported as an RSS-sum with no spatial gating (farm_evaluator.py
+     ti_eff_per_dst). Fixed: TI combination now uses max() over sources with
+     the lateral/range gates applied, matching FLORIS exactly. Discovered via
+     TestFullWindRose3x3 (3x3 grid, multi-direction/multi-speed rose), where
+     multiple upstream turbines simultaneously waking one destination turbine
+     had inflated the RSS-summed TI (over-widening sigma, under-predicting
+     wake loss) by ~11% on total AEP; after the fix the residual is float32
+     noise (<1e-6 relative).
 
 Tolerances
 ----------
   Single-turbine freestream power: ≤ 1 % (same table, only interp differs)
   Wake efficiency (2-turbine aligned): ≤ 10 % relative
   Multi-turbine (3-row) power/η vs FLORIS: ≤ 1 % relative (post Jacobi fix)
+  Full wind rose (3x3 grid, 8 dir x 5 speed) AEP: ≤ 1 % relative
+    (post TI max-combination fix; see TestFullWindRose3x3)
   Direction that these tests fail → suggests a porting bug, not a known deviation.
 
 Skip conditions
@@ -541,6 +559,88 @@ class TestMultiTurbineRow:
         assert rel_err < 0.01, (
             f"3-turbine η: ours={eta_us:.4f}, FLORIS={eta_fl:.4f}, "
             f"rel_err={rel_err:.2%}"
+        )
+
+
+class TestFullWindRose3x3:
+    """
+    Full wind-rose validation: 3x3 turbine grid, 8 wind directions x 5 wind
+    speeds (40 conditions total), matched against FLORIS run over the
+    identical flattened (direction, speed, freq) triples.
+
+    Unlike the single-direction row tests above, this grid has destination
+    turbines simultaneously waked by 2+ upstream sources on oblique
+    directions (e.g. FLORIS 45 deg) -- the one scenario where the wake-added
+    -TI combination rule actually matters (an in-line row only ever has one
+    active source per destination, so it can't expose this). This is what
+    caught farm_evaluator.py combining multi-source TI via RSS-sum with no
+    spatial gating instead of FLORIS's max()-across-sources with a 2D
+    lateral / 15D downstream gate (see CLAUDE.md "Known Deviations" #2 and
+    the module docstring above) -- total-AEP error was ~11% before that fix.
+    Now fixed, residual is float32 noise (<1e-6 relative).
+
+    Tolerance: <=1% relative on total AEP.
+    """
+
+    @staticmethod
+    def _speed_freqs(speeds, A=9.5, k=2.0):
+        """Un-normalised-bin Weibull PDF weights, normalised to sum to 1."""
+        pdf = (k / A) * (speeds / A) ** (k - 1) * np.exp(-(speeds / A) ** k)
+        return pdf / pdf.sum()
+
+    def test_3x3_grid_full_wind_rose_aep(self):
+        """3x3 grid, 8 directions x 5 speeds: total AEP within 1 % of FLORIS."""
+        from gpuwfarm_core.wind.wind_rose import WindRose
+
+        # 3x3 grid, 5D spacing in both x and y
+        xs = np.array([0.0, SEP_5D, 2 * SEP_5D])
+        ys = np.array([0.0, SEP_5D, 2 * SEP_5D])
+        gx, gy = np.meshgrid(xs, ys)
+        layout_x = gx.flatten().tolist()
+        layout_y = gy.flatten().tolist()
+        n = len(layout_x)
+
+        # 8 compass directions (met convention) x 5 wind speeds
+        floris_wds = np.arange(0.0, 360.0, 45.0)
+        our_wds    = (270.0 - floris_wds) % 360.0
+        speeds     = np.array([4.0, 6.0, 8.0, 10.0, 12.0], dtype=np.float32)
+
+        dir_freqs   = np.array([0.22, 0.09, 0.05, 0.05, 0.10, 0.14, 0.20, 0.15])
+        speed_freqs = self._speed_freqs(speeds)
+        freq_table  = np.outer(dir_freqs, speed_freqs).astype(np.float32)   # (8, 5)
+
+        td = _load_floris_turbine_data()
+
+        # ── FLORIS AEP over the flattened (dir, speed) grid ────────────────
+        fm        = _floris_model(layout_x, layout_y)
+        wd_flat   = np.repeat(floris_wds, len(speeds))
+        ws_flat   = np.tile(speeds.astype(float), len(floris_wds))
+        freq_flat = freq_table.flatten().astype(float)
+        fm.set(
+            wind_directions       =wd_flat,
+            wind_speeds           =ws_flat,
+            turbulence_intensities=np.full(len(wd_flat), TI_AMB, dtype=float),
+        )
+        fm.run()
+        aep_floris_kwh = fm.get_farm_AEP(freq=freq_flat) / 1000.0
+
+        # ── Our AEP over the same wind rose ────────────────────────────────
+        ev  = _our_evaluator(n, td)
+        pop = cp.zeros((1, n, 3), dtype=cp.float32)
+        pop[0, :, 0] = cp.asarray(np.array(layout_x, dtype=np.float32))
+        pop[0, :, 1] = cp.asarray(np.array(layout_y, dtype=np.float32))
+        rose = WindRose.from_uniform_ti(
+            wind_dirs  =our_wds.astype(np.float32),
+            wind_speeds=speeds,
+            freq_table =freq_table,
+            ti_ambient =TI_AMB,
+        )
+        aep_ours_kwh = float(cp.asnumpy(ev.evaluate(pop, rose))[0])
+
+        rel_err = abs(aep_ours_kwh - aep_floris_kwh) / aep_floris_kwh
+        assert rel_err < 0.01, (
+            f"3x3-grid full wind-rose AEP mismatch: ours={aep_ours_kwh:.0f} kWh, "
+            f"FLORIS={aep_floris_kwh:.0f} kWh, rel_err={rel_err:.2%}"
         )
 
 

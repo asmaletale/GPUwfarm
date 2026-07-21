@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gpuwfarm-core"
+version = "0.1.0"
+description = "GPU-batched, FLORIS-traceable wind-farm AEP evaluation core."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "cupy-cuda12x",
+]
+
+[project.optional-dependencies]
+# FLORIS-YAML loader (gpuwfarm_core.loaders.floris_yaml) needs PyYAML.
+floris = ["pyyaml"]
+# Test extras: pyyaml for the loader test, floris for the cross-validation test.
+test = ["pytest", "pyyaml", "floris"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gpuwfarm_core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

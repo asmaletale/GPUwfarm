@@ -1,0 +1,46 @@
+# Cost parameters for LCOE calculation. All in millions EUR unless noted.
+# Single source of truth for CostConfig defaults — see config.py module
+# docstring. Legacy source: legacy/AEP.py cost model (Myhr-derived, 15 MW ref).
+
+lifetime: 25.0              # years
+discount_rate: 0.05         # 5% annual discount
+
+# CAPEX per turbine
+dev_consenting_1wt: 3.15       # 0.21 * 15 MW
+turb_substructure_1wt: 32.0    # 1.6 * 15 + 8
+
+# Transmission (internal & export cables, substations)
+c_intcab: 0.3035        # millions/km internal cable
+c_expcable_ac: 2.336    # millions/km export cable AC
+c_expcable_dc: 1.168    # millions/km export cable DC
+c_offsub_ac: 39.0       # offshore substation AC
+c_offsub_dc: 142.75     # offshore substation DC
+c_onsub_dc: 84.35       # onshore substation DC
+ac_dc_threshold: 55.0   # km threshold for AC/DC choice
+n_expcables_ac: 1.0     # cables per 300 MW
+n_expcables_dc: 1.0     # cables per 300 MW
+
+# Mooring (per turbine, normalized)
+n_lines: 3.0            # mooring lines per turbine
+mbl_chain: 22286.0      # kN (breaking load)
+mbl_dea: 9800.0         # kN (dynamic event analyzer)
+f_usd_eur: 0.92         # USD to EUR conversion
+
+# Installation
+t_inst: 48.0            # hours per turbine
+v_ahts: 10.0            # km/h (AHTS vessel speed)
+v_psv: 61.7             # km/h (PSV vessel speed)
+c_boat: 0.011979        # millions/hour rental
+n_turtrip: 3.0          # turbines per trip
+n_fltrip: 2.0           # floaters per trip
+d_port: 10.0            # km distance to port
+c_inst_intcab: 0.115    # millions/km internal cable
+c_inst_expcab: 0.637    # millions/km export cable
+c_inst_offsub: 20.0     # millions (offshore substation)
+c_inst_moo_per_turb: 0.24  # millions per turbine
+
+# Decommissioning (salvage value, negative)
+r_dec: 0.23             # millions/MW
+
+# OPEX (annual, per turbine)
+opex_1wt: 1.965         # 0.131 * 15 MW (Myhr model)

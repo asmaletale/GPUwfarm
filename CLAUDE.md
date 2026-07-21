@@ -2,17 +2,22 @@
 
 ## Python Interpreter
 
-Default interpreter for this project (CUDA 12.6 laptop):
+Default interpreter for this project (CUDA 12.6 laptop), located under the
+current user's profile directory as `venv311pytorchcuda`:
 
 ```
-C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe
+%USERPROFILE%\PycharmProjects\venv311pytorchcuda\Scripts\python.exe
 ```
+
+This path is user-specific — resolve `%USERPROFILE%` (PowerShell: `$env:USERPROFILE`)
+for the current machine rather than hardcoding a username, since this repo is used
+across multiple machines/user accounts.
 
 Run tests and scripts with this interpreter:
 
-```bash
-& "C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m pytest tests/ -v
-& "C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" main.py
+```powershell
+& "$env:USERPROFILE\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m pytest packages/gpuwfarm-core -v
+& "$env:USERPROFILE\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m gpuwfarm_opt.main
 ```
 
 ## Project Purpose
@@ -21,25 +26,73 @@ A GPU-accelerated genetic algorithm for wind farm layout and yaw optimization.
 The physics layer is a faithful port of [FLORIS](https://github.com/NREL/floris),
 making every equation traceable to NREL source code.
 
+## Architecture: two packages
+
+The repo is a uv workspace split into two installable packages so the fast
+GPU evaluator can be used **without** the optimizer (e.g. inside a
+reinforcement-learning loop):
+
+- **`gpuwfarm_core`** (`packages/gpuwfarm-core/`) — the evaluation/simulation
+  layer: wake physics, batched `FarmEvaluator`, power curve, wind rose,
+  LCOE / visual-impact objectives, FLORIS-YAML loader, and the physics config
+  dataclasses. Depends only on `numpy` + `cupy`. This layer imports nothing
+  from the optimizer.
+- **`gpuwfarm_opt`** (`packages/gpuwfarm-optimizer/`) — the optimization layer:
+  genetic algorithm, feasibility-repair projection chain, CLI, and analysis
+  scripts. Depends on `gpuwfarm_core` (injects a `FarmEvaluator` into the GA).
+
+Standalone evaluation (no optimizer imported):
+
+```python
+from gpuwfarm_core import FarmEvaluator, WindRose, WakeConfig, FarmConfig, TurbineConfig, TurbineData
+evaluator = FarmEvaluator(farm_cfg, turbine_cfg, wake_cfg, turbine_data)
+aep = evaluator.evaluate(pop, wind_rose)   # (P,) cupy array
+```
+
+Editable install of both packages (uv workspace):
+
+```bash
+uv sync
+# or with pip:
+pip install -e packages/gpuwfarm-core -e packages/gpuwfarm-optimizer
+```
+
 ## Repository Layout
 
 ```
-gpuwfarm/
-├── config.py                    # FarmConfig, GAConfig, WakeConfig dataclasses
-├── main.py                      # Entry point
-├── CLAUDE.md                    # This file
-├── physics/
-│   ├── base.py                  # BaseWakeComponent ABC
-│   ├── wake_velocity/gauss.py   # FLORIS GaussVelocityDeficit port
-│   ├── wake_turbulence/crespo_hernandez.py  # FLORIS CrespoHernandez port
-│   ├── wake_deflection/gauss.py # FLORIS GaussVelocityDeflection port
-│   ├── wake_combination/        # SOSFS / FLS / MAX (FLORIS ports)
-│   ├── turbine/power_curve.py   # Tabulated power curve + cosine yaw loss
-│   └── farm_evaluator.py        # Pipeline orchestrator
-├── projection/                  # Feasibility repair operators
-├── wind/wind_rose.py            # WindRose (dir×speed bins + Weibull)
-├── optimizer/genetic.py         # GeneticAlgorithm
-└── tests/                       # Unit tests (see Validation section)
+GPUwfarm/
+├── pyproject.toml                       # uv workspace root
+├── examples/gch.yaml                    # FLORIS-YAML loader example
+├── CLAUDE.md                            # This file
+├── packages/gpuwfarm-core/              # EVALUATION CORE (numpy + cupy only)
+│   ├── pyproject.toml
+│   ├── src/gpuwfarm_core/
+│   │   ├── __init__.py                  # public API
+│   │   ├── config.py                    # WakeConfig, FarmConfig, TurbineConfig,
+│   │   │                                #   CostConfig, VisualImpactConfig
+│   │   ├── objectives.py                # ObjectiveEvaluator (LCOE + visual impact)
+│   │   ├── physics/
+│   │   │   ├── base.py                  # wake-model ABCs
+│   │   │   ├── farm_evaluator.py        # batched pipeline orchestrator
+│   │   │   ├── wake_velocity/gauss.py   # FLORIS GaussVelocityDeficit port
+│   │   │   ├── wake_turbulence/crespo_hernandez.py  # FLORIS CrespoHernandez port
+│   │   │   ├── wake_deflection/gauss.py # FLORIS GaussVelocityDeflection port
+│   │   │   ├── wake_combination/        # SOSFS / FLS / MAX (FLORIS ports)
+│   │   │   └── turbine/power_curve.py   # Tabulated power curve + cosine yaw loss
+│   │   ├── wind/wind_rose.py            # WindRose (dir×speed bins + Weibull)
+│   │   └── loaders/floris_yaml.py       # FLORIS v4 YAML → config objects
+│   └── tests/                           # Unit tests (physics/AEP; see Validation)
+└── packages/gpuwfarm-optimizer/         # OPTIMIZER (depends on gpuwfarm-core)
+    ├── pyproject.toml
+    ├── src/gpuwfarm_opt/
+    │   ├── config.py                    # GAConfig
+    │   ├── genetic.py                   # GeneticAlgorithm
+    │   ├── population_logger.py         # async HDF5 history logger
+    │   ├── projection/                  # Feasibility repair operators
+    │   ├── main.py                      # CLI entry point (gpuwfarm-optimize)
+    │   └── scripts/                     # benchmark, validate_aep, analyze_history, extract_pareto
+    ├── smoke/                           # manual run-at-import smoke scripts
+    └── tests/                           # optimizer unit tests
 ```
 
 ## FLORIS Source References
@@ -73,14 +126,18 @@ AEP          (P,)        — fitness value
 ## Physics Parameters (FLORIS defaults)
 
 `WakeConfig`, `TurbineConfig`, and `FarmConfig.air_density`/`ti_ambient` in
-`config.py` do **not** hardcode these numbers — they are `field(default_factory=...)`
-values parsed at import time from `examples/gch.yaml` (farm/wake) and
-`examples/nrel_5MW.yaml` (turbine, FLORIS's own file). `loaders/floris_yaml.py`
-parses a user-supplied YAML through the exact same `WakeConfig.from_wake_dict`
-/ `TurbineConfig.from_turbine_dict` classmethods, so `WakeConfig()` and loading
+`gpuwfarm_core/config.py` do **not** hardcode these numbers — they are
+`field(default_factory=...)` values parsed at import time from
+`examples/gch.yaml` (farm/wake) and `examples/nrel_5MW.yaml` (turbine,
+FLORIS's own file). `gpuwfarm_core/loaders/floris_yaml.py` parses a
+user-supplied YAML through the exact same `WakeConfig.from_wake_dict` /
+`TurbineConfig.from_turbine_dict` classmethods, so `WakeConfig()` and loading
 `examples/gch.yaml` always agree. To change a default, edit the YAML, not
-config.py. The two YAMLs are kept separate on purpose (mirrors FLORIS's own
-farm-input vs. turbine-library split) — do not merge turbine data into gch.yaml.
+config.py. The same pattern applies to `CostConfig` (from `examples/costs.yaml`)
+and `VisualImpactConfig` (from `examples/visual_impact.yaml`) via
+`from_costs_dict`/`from_vi_dict`. Each YAML is kept separate on purpose — one
+concern per file (mirrors FLORIS's own farm-input vs. turbine-library split) —
+do not merge them into a single config file.
 
 ```python
 # Gauss wake / deflection
@@ -117,33 +174,40 @@ Set `WakeConfig.combination` to one of:
 
 ## Adding a New Wake Model
 
-1. Subclass `BaseWakeComponent` from `physics/base.py`
-2. Implement `prepare(config)` and `compute(dx, dy, ...)` returning `(P, T, T)` tensor
+1. Subclass the relevant base from `gpuwfarm_core/physics/base.py`
+2. Implement `compute(dx, dy, ...)` returning a `(P, T, T)` tensor
 3. Register in `FarmEvaluator` via `WakeConfig`
 
 ## Adding a New Projection Operator
 
-1. Subclass `ProjectionOperator` from `projection/base.py`
+1. Subclass `ProjectionOperator` from `gpuwfarm_opt/projection/base.py`
 2. Implement `project(pop: cp.ndarray) -> cp.ndarray`
-3. Add to `CompositeProjection` chain in `main.py`
+3. Add to `CompositeProjection` chain in `gpuwfarm_opt/main.py`
 
 ## Running Tests
 
 ```bash
-pytest tests/ -v
+pytest packages/gpuwfarm-core        # physics / AEP core (runs standalone)
+pytest packages/gpuwfarm-optimizer   # optimizer unit tests
 ```
 
-Compare AEP output against FLORIS reference for a 2-turbine aligned case.
+The core suite passes with only `gpuwfarm-core` installed — proof that the
+evaluation layer is independent of the optimizer. Compare AEP output against
+the FLORIS reference for a 2-turbine aligned case (`test_floris_comparison.py`,
+requires the `floris` package).
 
 ## Dependencies
 
+Declared per package in the respective `pyproject.toml` (no top-level
+`requirements.txt`):
+
 ```
-cupy-cuda11x   (or cupy-cuda12x)
-numpy
-scipy          # power curve interpolation (CPU only, run once at init)
-matplotlib
-pytest
+gpuwfarm-core:       numpy, cupy-cuda12x   (extras: floris → pyyaml; test → pytest, pyyaml, floris)
+gpuwfarm-optimizer:  gpuwfarm-core, numpy, h5py, hdf5plugin   (extras: viz → matplotlib)
 ```
+
+Note: `scipy` was listed historically but is unused — power-curve lookup uses
+`cp.interp`, not scipy.
 
 ## FLORIS Equation Cheat Sheet
 

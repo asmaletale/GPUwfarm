@@ -1,0 +1,17 @@
+# Observer and geometry parameters for visual impact assessment.
+# Single source of truth for VisualImpactConfig defaults — see config.py
+# module docstring. Legacy source: legacy/AEP.get_farm_VI() + legacy/configBinary.py.
+# Turbine geometry (hub_height, rotor_diameter) is read from TurbineConfig,
+# not duplicated here.
+
+earth_radius: 6.371e6   # m
+xfov_deg: 120.0         # degrees — horizontal field of view
+zfov_deg: 40.0          # degrees — vertical field of view
+
+# Observer locations [[x, y], ...], heights above ground (m), relative weights
+obs_coords:
+  - [0.0, 0.0]
+obs_heights:
+  - 1.77
+obs_weights:
+  - 1.0

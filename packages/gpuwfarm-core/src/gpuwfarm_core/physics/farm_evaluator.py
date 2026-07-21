@@ -34,6 +34,12 @@ from gpuwfarm_core.wind.wind_rose import WindRose
 
 _COMBINATION_CLASSES = {"SOSFS": SOSFS, "FLS": FLS, "MAX": MAX}
 
+# Jacobi fixed-point passes for waked-source inflow (see farm_evaluator.evaluate()).
+# Must cover the longest downstream wake chain in the farm; 3 covers rows up to
+# depth 3, bump for deeper/denser layouts. Not a physics parameter -- purely a
+# solver convergence knob, so it does not come from the FLORIS YAML config.
+N_JACOBI_ITERS = 3
+
 
 class FarmEvaluator:
     """
@@ -108,71 +114,86 @@ class FarmEvaluator:
             # Numerical floor so sigma formulas never receive dx ≤ 0
             dx_safe = cp.maximum(dx_raw, cp.float32(1.0))
 
-            # 3. Freestream Ct at each turbine (first-pass approximation).
-            #    FLORIS sequential solver initialises with freestream Ct too.
-            u_fs = cp.full((P, T), ws, dtype=cp.float32)
-            ct   = self.power_curve.ct_gpu(u_fs)          # (P, T)
-            ai   = self.power_curve.axial_induction_gpu(u_fs)  # (P, T)
+            # 3-8. Jacobi fixed-point solve for waked-source inflow.
+            #
+            # Every source turbine's Ct/axial-induction/u_inf should come from its own
+            # local (possibly waked) inflow, not freestream -- otherwise an interior
+            # turbine (e.g. T2 in a row of 3+) sheds a too-strong wake onto turbines
+            # behind it. Because wake dependencies are strictly downstream (a DAG, not
+            # a cycle), iterating "each turbine's source state <- previous iteration's
+            # effective speed" converges to the exact sequential-solver fixed point in
+            # `chain_depth` passes, with no per-individual sort. Iteration 0 uses
+            # freestream, exactly reproducing the old one-shot approximation.
+            u_src = cp.full((P, T), ws, dtype=cp.float32)   # (P, T) local inflow at each source
 
-            # 4. CrespoHernandez added TI: (P, T_src, T_dst)
-            ti_added = self.turbulence_model.compute(
-                dx=dx_safe,
-                axial_induction=ai,
-                ambient_ti=ti,
-                rotor_diameter=self.D,
-            )
-            # Zero out upstream contributions
-            ti_added = cp.where(downstream_mask, ti_added, cp.zeros_like(ti_added))
+            for _ in range(N_JACOBI_ITERS):
+                # 3. Ct / axial induction from local (waked) source inflow
+                ct = self.power_curve.ct_gpu(u_src)                # (P, T)
+                ai = self.power_curve.axial_induction_gpu(u_src)   # (P, T)
 
-            # Per-turbine effective TI: RSS of ambient + added TI from all upstream srcs
-            # For each destination turbine j: TI_j = sqrt(TI_amb² + Σ_i TI_added[i,j]²)
-            ti_eff_per_dst = cp.sqrt(
-                cp.float32(ti ** 2) + cp.sum(ti_added ** 2, axis=1)
-            )  # (P, T_dst)
+                # 4. CrespoHernandez added TI: (P, T_src, T_dst)
+                ti_added = self.turbulence_model.compute(
+                    dx=dx_safe,
+                    axial_induction=ai,
+                    ambient_ti=ti,
+                    rotor_diameter=self.D,
+                )
+                # Zero out upstream contributions
+                ti_added = cp.where(downstream_mask, ti_added, cp.zeros_like(ti_added))
 
-            # Broadcast: each src turbine i uses the *source* turbine's TI for sigma
-            # ti_eff_pairs[p, i, j] = TI at source turbine i
-            ti_eff_pairs = cp.broadcast_to(
-                ti_eff_per_dst[:, :, None], (P, T, T)
-            ).copy()   # (P, T_src, T_dst) — TI at src i, repeated across dst dimension
+                # Per-turbine effective TI: RSS of ambient + added TI from all upstream srcs
+                # For each destination turbine j: TI_j = sqrt(TI_amb² + Σ_i TI_added[i,j]²)
+                ti_eff_per_dst = cp.sqrt(
+                    cp.float32(ti ** 2) + cp.sum(ti_added ** 2, axis=1)
+                )  # (P, T_dst)
 
-            # 5. Wake deflection delta: (P, T_src, T_dst)
-            delta = self.deflection_model.compute(
-                dx=dx_safe,
-                ct=ct,
-                ti_eff=ti_eff_pairs,
-                yaw=yaw,
-                u_inf=float(ws),
-                rotor_diameter=self.D,
-                # dx is already relative (xw[dst]-xw[src]), so the source sits at
-                # relative position 0 here, not its absolute xw -- passing xw
-                # corrupts near/far-wake boundary detection for any source not at
-                # x=0 (e.g. a middle turbine in a row of 3+).
-                x_i=cp.zeros_like(xw),
-            )
+                # Broadcast: each src turbine i uses the *source* turbine's TI for sigma
+                # ti_eff_pairs[p, i, j] = TI at source turbine i
+                ti_eff_pairs = cp.broadcast_to(
+                    ti_eff_per_dst[:, :, None], (P, T, T)
+                ).copy()   # (P, T_src, T_dst) — TI at src i, repeated across dst dimension
 
-            # 6. Velocity deficit: (P, T_src, T_dst)
-            deficit = self.velocity_model.compute(
-                dx=dx_safe,
-                dy=dy_raw,
-                delta=delta,
-                ct=ct,
-                ti_eff=ti_eff_pairs,
-                yaw=yaw,
-                u_inf=float(ws),
-                rotor_diameter=self.D,
-                x_i=cp.zeros_like(xw),   # see note above deflection_model.compute()
-            )
+                # 5. Wake deflection delta: (P, T_src, T_dst)
+                delta = self.deflection_model.compute(
+                    dx=dx_safe,
+                    ct=ct,
+                    ti_eff=ti_eff_pairs,
+                    yaw=yaw,
+                    u_inf=u_src,
+                    rotor_diameter=self.D,
+                    # dx is already relative (xw[dst]-xw[src]), so the source sits at
+                    # relative position 0 here, not its absolute xw -- passing xw
+                    # corrupts near/far-wake boundary detection for any source not at
+                    # x=0 (e.g. a middle turbine in a row of 3+).
+                    x_i=cp.zeros_like(xw),
+                )
 
-            # Apply downstream mask (deficit only counts downstream)
-            deficit = cp.where(downstream_mask, deficit, cp.zeros_like(deficit))
+                # 6. Velocity deficit: (P, T_src, T_dst)
+                deficit = self.velocity_model.compute(
+                    dx=dx_safe,
+                    dy=dy_raw,
+                    delta=delta,
+                    ct=ct,
+                    ti_eff=ti_eff_pairs,
+                    yaw=yaw,
+                    u_inf=u_src,
+                    rotor_diameter=self.D,
+                    x_i=cp.zeros_like(xw),   # see note above deflection_model.compute()
+                )
 
-            # 7. Wake combination → total deficit per turbine: (P, T_dst)
-            total_deficit = self.combination_model.combine(deficit)
-            total_deficit = cp.clip(total_deficit, cp.float32(0.0), cp.float32(0.95))
+                # Apply downstream mask (deficit only counts downstream)
+                deficit = cp.where(downstream_mask, deficit, cp.zeros_like(deficit))
 
-            # 8. Effective wind speed and power
-            u_eff    = ws * (cp.float32(1.0) - total_deficit)    # (P, T)
+                # 7. Wake combination → total deficit per turbine: (P, T_dst)
+                # total_deficit stays a fraction of FREESTREAM (ws); only the
+                # source-side quantities (Ct, sigma, u_inf) become local.
+                total_deficit = self.combination_model.combine(deficit)
+                total_deficit = cp.clip(total_deficit, cp.float32(0.0), cp.float32(0.95))
+
+                # 8. New effective speed, fed back as next iteration's source inflow
+                u_src = ws * (cp.float32(1.0) - total_deficit)   # (P, T)
+
+            u_eff    = u_src
             power_kw = self.power_curve.power_gpu(u_eff, yaw)    # (P, T) kW
 
             if per_turbine:

@@ -41,16 +41,19 @@ Known residual deviations (see CLAUDE.md)
 -----------------------------------------
   1. FLORIS evaluates turbines sequentially (sorted downstream) and
      recomputes each turbine's Ct/axial-induction from its true LOCAL
-     (already-waked) inflow speed before using it as a wake source. We
-     evaluate all pairs simultaneously and compute every source turbine's
-     Ct/axial-induction from FREESTREAM speed (farm_evaluator.py step 3),
-     so a turbine's own waking is not reflected in the wake IT generates
-     downstream. This only affects turbines with >=1 turbine upstream of
-     THEM that also has turbines further downstream (e.g. the middle
-     turbine of a 3-turbine row) -- verified to cause ~5% single-condition
-     power error and up to ~20% AEP error on the affected turbine, with
-     zero effect on turbines whose sources are all unwaked (e.g. any
-     2-turbine case, or the first two turbines of a longer row).
+     (already-waked) inflow speed before using it as a wake source.
+     FarmEvaluator now reproduces this via an N-pass Jacobi fixed-point solve
+     (farm_evaluator.py N_JACOBI_ITERS): every source turbine's Ct/axial-
+     induction/u_inf is recomputed each pass from the PREVIOUS pass's local
+     effective speed (u_src), initialised at freestream on pass 0. Because
+     wake dependencies are strictly downstream (a DAG, not a cycle), this
+     converges to the exact same fixed point FLORIS's sorted solver reaches,
+     in exactly `chain_depth` passes, fully vectorised (no per-individual
+     sort). Residual on the 3-turbine row below N_JACOBI_ITERS=3 is now
+     float32 rounding noise (<1%), down from the ~5% single-condition /
+     ~20% AEP error of the old one-shot freestream-Ct approximation. Deeper
+     wake chains (rows of 4+) need N_JACOBI_ITERS >= chain depth to fully
+     converge -- bump the constant if validating longer rows.
 
      (An earlier version of this note also blamed RSS-vs-sequential TI
      combination for the residual; verified NOT to matter here -- swapping
@@ -60,7 +63,7 @@ Tolerances
 ----------
   Single-turbine freestream power: ≤ 1 % (same table, only interp differs)
   Wake efficiency (2-turbine aligned): ≤ 10 % relative
-  Multi-turbine AEP ratio vs FLORIS: ≤ 12 % relative
+  Multi-turbine (3-row) power/η vs FLORIS: ≤ 1 % relative (post Jacobi fix)
   Direction that these tests fail → suggests a porting bug, not a known deviation.
 
 Skip conditions
@@ -488,12 +491,18 @@ class TestMultiTurbineRow:
     3-turbine and 4-turbine rows test the sequential vs simultaneous difference
     because wake interactions involve feedback between turbines 2 and 3.
 
-    Tolerance is wider (15 %) to accommodate the known TI propagation difference
-    between FLORIS's sequential solver and our simultaneous all-pairs approach.
+    FarmEvaluator now runs an N-pass Jacobi fixed-point solve on waked-source
+    inflow (see farm_evaluator.py N_JACOBI_ITERS): each turbine's Ct/axial
+    induction/u_inf is recomputed from its own local effective speed each pass,
+    fed back from the previous pass, instead of freestream. Because wake
+    dependencies are strictly downstream (a DAG), this converges to the exact
+    same fixed point as FLORIS's sorted sequential solver in `chain_depth`
+    passes -- residual is now float32 noise (< 1%), not the ~15-20% freestream-Ct
+    approximation error from before.
     """
 
     def test_3turbine_row_farm_power(self):
-        """3-turbine row at 5D spacing: farm power within 15 % of FLORIS."""
+        """3-turbine row at 5D spacing: farm power within 1 % of FLORIS."""
         td       = _load_floris_turbine_data()
         layout_x = [0.0, SEP_5D, 2 * SEP_5D]
         layout_y = [0.0, 0.0,    0.0]
@@ -503,13 +512,13 @@ class TestMultiTurbineRow:
         p_ours      = _our_farm_power_kw(layout_x, layout_y, td)
 
         rel_err = abs(p_ours - p_floris) / p_floris
-        assert rel_err < 0.15, (
+        assert rel_err < 0.01, (
             f"3-turbine row farm power: ours={p_ours:.1f} kW, "
             f"FLORIS={p_floris:.1f} kW, rel_err={rel_err:.2%}"
         )
 
     def test_3turbine_row_wake_efficiency(self):
-        """3-turbine row: η within 15 % of FLORIS."""
+        """3-turbine row: η within 1 % of FLORIS."""
         td       = _load_floris_turbine_data()
         layout_x = [0.0, SEP_5D, 2 * SEP_5D]
         layout_y = [0.0, 0.0,    0.0]
@@ -529,7 +538,7 @@ class TestMultiTurbineRow:
         eta_us = p_us_waked / p_us_free
 
         rel_err = abs(eta_us - eta_fl) / eta_fl
-        assert rel_err < 0.15, (
+        assert rel_err < 0.01, (
             f"3-turbine η: ours={eta_us:.4f}, FLORIS={eta_fl:.4f}, "
             f"rel_err={rel_err:.2%}"
         )

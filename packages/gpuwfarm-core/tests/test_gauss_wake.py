@@ -32,7 +32,7 @@ TI   = 0.06
 
 
 def _make_collinear(downstream_x: float, P: int = 1):
-    """Build (dx, dy, delta, ct, ti_eff, yaw, x_i) for a pair at given x."""
+    """Build (dx, dy, delta, ct, ti_eff, yaw, x_i, u_inf) for a pair at given x."""
     T = 2
     dx = cp.zeros((P, T, T), dtype=cp.float32)
     dy = cp.zeros((P, T, T), dtype=cp.float32)
@@ -43,8 +43,9 @@ def _make_collinear(downstream_x: float, P: int = 1):
     ti_eff  = cp.full((P, T, T), TI, dtype=cp.float32)
     yaw     = cp.zeros((P, T),      dtype=cp.float32)
     x_i     = cp.zeros((P, T),      dtype=cp.float32)   # src at origin
+    u_inf   = cp.full((P, T), UINF, dtype=cp.float32)   # freestream at every source
 
-    return dx, dy, delta, ct, ti_eff, yaw, x_i
+    return dx, dy, delta, ct, ti_eff, yaw, x_i, u_inf
 
 
 class TestGaussVelocityDeficit:
@@ -55,19 +56,19 @@ class TestGaussVelocityDeficit:
 
     def test_zero_upstream(self):
         """No deficit at an upstream location."""
-        dx, dy, delta, ct, ti_eff, yaw, x_i = _make_collinear(-3.0 * D)
+        dx, dy, delta, ct, ti_eff, yaw, x_i, u_inf = _make_collinear(-3.0 * D)
         # Swap: turbine 1 is upstream of turbine 0
         deficit = cp.asnumpy(
-            self.model.compute(dx, dy, delta, ct, ti_eff, yaw, UINF, D, x_i)
+            self.model.compute(dx, dy, delta, ct, ti_eff, yaw, u_inf, D, x_i)
         )
         assert deficit[0, 0, 1] == pytest.approx(0.0, abs=1e-5), \
             "Deficit must be 0 upstream"
 
     def test_positive_downstream(self):
         """Positive deficit at 6D downstream."""
-        dx, dy, delta, ct, ti_eff, yaw, x_i = _make_collinear(6.0 * D)
+        dx, dy, delta, ct, ti_eff, yaw, x_i, u_inf = _make_collinear(6.0 * D)
         deficit = cp.asnumpy(
-            self.model.compute(dx, dy, delta, ct, ti_eff, yaw, UINF, D, x_i)
+            self.model.compute(dx, dy, delta, ct, ti_eff, yaw, u_inf, D, x_i)
         )
         d = deficit[0, 0, 1]
         assert 0.0 < d < 1.0, f"Expected deficit in (0,1), got {d:.4f}"
@@ -77,9 +78,9 @@ class TestGaussVelocityDeficit:
         distances = [3.0, 5.0, 8.0, 12.0, 20.0]
         deficits  = []
         for dist_D in distances:
-            dx, dy, delta, ct, ti_eff, yaw, x_i = _make_collinear(dist_D * D)
+            dx, dy, delta, ct, ti_eff, yaw, x_i, u_inf = _make_collinear(dist_D * D)
             d = float(cp.asnumpy(
-                self.model.compute(dx, dy, delta, ct, ti_eff, yaw, UINF, D, x_i)
+                self.model.compute(dx, dy, delta, ct, ti_eff, yaw, u_inf, D, x_i)
             )[0, 0, 1])
             deficits.append(d)
 
@@ -92,16 +93,16 @@ class TestGaussVelocityDeficit:
         """Centred wake produces higher deficit than laterally offset."""
         dist = 7.0 * D
         # Centred
-        dx, dy_c, delta, ct, ti_eff, yaw, x_i = _make_collinear(dist)
+        dx, dy_c, delta, ct, ti_eff, yaw, x_i, u_inf = _make_collinear(dist)
         # Offset by 1D laterally
         dy_off = dy_c.copy()
         dy_off[:, 0, 1] = D
 
         d_centre = float(cp.asnumpy(
-            self.model.compute(dx, dy_c,   delta, ct, ti_eff, yaw, UINF, D, x_i)
+            self.model.compute(dx, dy_c,   delta, ct, ti_eff, yaw, u_inf, D, x_i)
         )[0, 0, 1])
         d_offset = float(cp.asnumpy(
-            self.model.compute(dx, dy_off, delta, ct, ti_eff, yaw, UINF, D, x_i)
+            self.model.compute(dx, dy_off, delta, ct, ti_eff, yaw, u_inf, D, x_i)
         )[0, 0, 1])
         assert d_centre > d_offset, \
             f"Centre deficit {d_centre:.4f} should exceed offset {d_offset:.4f}"
@@ -109,24 +110,24 @@ class TestGaussVelocityDeficit:
     def test_deficit_bound(self):
         """Deficit must never exceed 1.0 for any plausible input."""
         for dist_D in [1.0, 3.0, 6.0, 10.0]:
-            dx, dy, delta, ct, ti_eff, yaw, x_i = _make_collinear(dist_D * D)
+            dx, dy, delta, ct, ti_eff, yaw, x_i, u_inf = _make_collinear(dist_D * D)
             d = float(cp.asnumpy(
-                self.model.compute(dx, dy, delta, ct, ti_eff, yaw, UINF, D, x_i)
+                self.model.compute(dx, dy, delta, ct, ti_eff, yaw, u_inf, D, x_i)
             )[0, 0, 1])
             assert d <= 1.0, f"Deficit {d:.4f} > 1.0 at {dist_D}D"
 
     def test_yaw_reduces_axial_deficit(self):
         """Yawed turbine produces smaller axial (centred) deficit."""
         dist = 6.0 * D
-        dx, dy, delta, ct, ti_eff, _, x_i = _make_collinear(dist)
+        dx, dy, delta, ct, ti_eff, _, x_i, u_inf = _make_collinear(dist)
         yaw_0  = cp.zeros_like(ct)
         yaw_20 = cp.full_like(ct, np.deg2rad(20))
 
         d_aligned = float(cp.asnumpy(
-            self.model.compute(dx, dy, delta, ct, ti_eff, yaw_0,  UINF, D, x_i)
+            self.model.compute(dx, dy, delta, ct, ti_eff, yaw_0,  u_inf, D, x_i)
         )[0, 0, 1])
         d_yawed = float(cp.asnumpy(
-            self.model.compute(dx, dy, delta, ct, ti_eff, yaw_20, UINF, D, x_i)
+            self.model.compute(dx, dy, delta, ct, ti_eff, yaw_20, u_inf, D, x_i)
         )[0, 0, 1])
         assert d_aligned >= d_yawed, \
             f"Aligned deficit {d_aligned:.4f} should be >= yawed {d_yawed:.4f}"

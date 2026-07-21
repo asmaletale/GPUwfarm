@@ -56,7 +56,7 @@ class GaussVelocityDeficit(BaseWakeVelocity):
     def _sigma_initial(
         ct: cp.ndarray,   # (P, T_src, 1) broadcast-ready
         yaw: cp.ndarray,  # (P, T_src, 1) in FLORIS sign (–yaw_input)
-        u_inf: float,
+        u_inf: cp.ndarray,  # (P, T_src, 1) local inflow at the source turbine
         D: float,
     ):
         """sigma_y0, sigma_z0 from FLORIS near-wake init (gauss.py lines ~50-56)."""
@@ -110,7 +110,7 @@ class GaussVelocityDeficit(BaseWakeVelocity):
         ct: cp.ndarray,           # (P, T_src)
         ti_eff: cp.ndarray,       # (P, T_src, T_dst)
         yaw: cp.ndarray,          # (P, T_src) radians (user sign convention)
-        u_inf: float,
+        u_inf: cp.ndarray,        # (P, T_src) local inflow at the source turbine
         rotor_diameter: float,
         x_i: cp.ndarray,          # (P, T_src) source x in wind frame
     ) -> cp.ndarray:               # (P, T_src, T_dst) velocity deficit fraction
@@ -131,12 +131,13 @@ class GaussVelocityDeficit(BaseWakeVelocity):
         ct_b   = ct[:, :, None]
         yaw_b  = yaw_int[:, :, None]
         xi_b   = x_i[:, :, None]
+        u_b    = u_inf[:, :, None]   # (P, T_src, 1) local inflow at source
 
         # TI at the source turbine (use ambient column 0 approximation)
         ti_src = ti_eff[:, :, 0:1]   # (P, T_src, 1)
 
         # Initial sigma and far-wake start
-        sigma_y0, sigma_z0, _, _ = self._sigma_initial(ct_b, yaw_b, u_inf, D)
+        sigma_y0, sigma_z0, _, _ = self._sigma_initial(ct_b, yaw_b, u_b, D)
         x0 = self._x0(ct_b, yaw_b, ti_src, xi_b, self.alpha, self.beta, D)
         xR = xi_b   # near-wake starts at turbine location
 

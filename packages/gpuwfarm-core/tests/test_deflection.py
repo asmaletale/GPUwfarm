@@ -40,10 +40,11 @@ def _make_pair(dx_val: float, yaw_deg: float, P: int = 1):
     ti_eff  = cp.full((P, T, T), TI, dtype=cp.float32)
     yaw     = cp.zeros((P, T),      dtype=cp.float32)
     x_i     = cp.zeros((P, T),      dtype=cp.float32)
+    u_inf   = cp.full((P, T), UINF, dtype=cp.float32)   # freestream at every source
 
     dx[:, 0, 1] = dx_val
     yaw[:, 0]   = np.deg2rad(yaw_deg)
-    return dx, ct, ti_eff, yaw, x_i
+    return dx, ct, ti_eff, yaw, x_i, u_inf
 
 
 class TestGaussVelocityDeflection:
@@ -54,31 +55,31 @@ class TestGaussVelocityDeflection:
 
     def test_zero_deflection_for_zero_yaw(self):
         """No yaw → no deflection (with ad=bd=0)."""
-        dx, ct, ti_eff, yaw, x_i = _make_pair(8.0 * D, 0.0)
+        dx, ct, ti_eff, yaw, x_i, u_inf = _make_pair(8.0 * D, 0.0)
         delta = cp.asnumpy(
-            self.model.compute(dx, ct, ti_eff, yaw, UINF, D, x_i)
+            self.model.compute(dx, ct, ti_eff, yaw, u_inf, D, x_i)
         )
         assert abs(delta[0, 0, 1]) < 1e-3, \
             f"Expected ~0 deflection for 0 yaw, got {delta[0,0,1]:.4f}"
 
     def test_positive_yaw_gives_deflection(self):
         """Non-zero yaw produces non-zero deflection."""
-        dx, ct, ti_eff, yaw, x_i = _make_pair(8.0 * D, 20.0)
+        dx, ct, ti_eff, yaw, x_i, u_inf = _make_pair(8.0 * D, 20.0)
         delta = cp.asnumpy(
-            self.model.compute(dx, ct, ti_eff, yaw, UINF, D, x_i)
+            self.model.compute(dx, ct, ti_eff, yaw, u_inf, D, x_i)
         )
         assert abs(delta[0, 0, 1]) > 0.01 * D, \
             f"Expected significant deflection for yaw=20°, got {delta[0,0,1]:.4f}"
 
     def test_deflection_sign_flips_with_yaw(self):
         """Opposite yaw → opposite deflection."""
-        dx_p, ct, ti_p, yaw_p, x_i = _make_pair(8.0 * D,  15.0)
-        dx_n, _,  ti_n, yaw_n, _   = _make_pair(8.0 * D, -15.0)
+        dx_p, ct, ti_p, yaw_p, x_i, u_inf = _make_pair(8.0 * D,  15.0)
+        dx_n, _,  ti_n, yaw_n, _, _     = _make_pair(8.0 * D, -15.0)
         d_p = float(cp.asnumpy(
-            self.model.compute(dx_p, ct, ti_p, yaw_p, UINF, D, x_i)
+            self.model.compute(dx_p, ct, ti_p, yaw_p, u_inf, D, x_i)
         )[0, 0, 1])
         d_n = float(cp.asnumpy(
-            self.model.compute(dx_n, ct, ti_n, yaw_n, UINF, D, x_i)
+            self.model.compute(dx_n, ct, ti_n, yaw_n, u_inf, D, x_i)
         )[0, 0, 1])
         assert np.sign(d_p) != np.sign(d_n), \
             f"Deflection sign should flip: +yaw={d_p:.3f}, -yaw={d_n:.3f}"
@@ -89,9 +90,9 @@ class TestGaussVelocityDeflection:
         dists = [4.0, 8.0, 12.0]
         deflections = []
         for dist_D in dists:
-            dx, ct, ti, y, x_i = _make_pair(dist_D * D, yaw)
+            dx, ct, ti, y, x_i, u_inf = _make_pair(dist_D * D, yaw)
             d = float(cp.asnumpy(
-                self.model.compute(dx, ct, ti, y, UINF, D, x_i)
+                self.model.compute(dx, ct, ti, y, u_inf, D, x_i)
             )[0, 0, 1])
             deflections.append(abs(d))
         assert deflections[0] <= deflections[1] <= deflections[2], \
@@ -99,9 +100,9 @@ class TestGaussVelocityDeflection:
 
     def test_no_deflection_upstream(self):
         """Upstream turbines are not deflected by downstream turbines."""
-        dx, ct, ti, yaw, x_i = _make_pair(-5.0 * D, 20.0)
+        dx, ct, ti, yaw, x_i, u_inf = _make_pair(-5.0 * D, 20.0)
         delta = cp.asnumpy(
-            self.model.compute(dx, ct, ti, yaw, UINF, D, x_i)
+            self.model.compute(dx, ct, ti, yaw, u_inf, D, x_i)
         )
         assert abs(delta[0, 0, 1]) < 1e-3, \
             "No deflection for upstream pair"

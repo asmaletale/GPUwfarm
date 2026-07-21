@@ -52,7 +52,7 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         ct: cp.ndarray,          # (P, T_src) thrust coefficient
         ti: cp.ndarray,          # (P, T_src, T_dst) effective TI
         yaw: cp.ndarray,         # (P, T_src) radians (FLORIS sign convention: −yaw)
-        u_inf: float,
+        u_inf: cp.ndarray,       # (P, T_src) local inflow at the source turbine
         D: float,
         x_i: cp.ndarray,         # (P, T_src) source x-coordinate in wind frame
     ):
@@ -71,6 +71,7 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         ct_   = ct[:, :, None]     # (P, T, 1)
         yaw_  = yaw[:, :, None]    # (P, T, 1) already in FLORIS −sign
         xi_   = x_i[:, :, None]    # (P, T, 1)
+        u_b   = u_inf[:, :, None]  # (P, T, 1) local inflow at source
 
         # ti is already (P, T_src, T_dst); take representative TI at each src
         # (we use the src's own TI row: ambient + wakes from turbines upstream of src)
@@ -80,10 +81,10 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         ti_src = ti[:, :, 0:1]    # (P, T_src, 1) — use first col as TI of the source
 
         sqrt_1_ct = cp.sqrt(cp.clip(1.0 - ct_, 0.0, 1.0))
-        uR = u_inf * ct_ / (2.0 * (1.0 - sqrt_1_ct + 1e-8))
-        u0 = u_inf * sqrt_1_ct
+        uR = u_b * ct_ / (2.0 * (1.0 - sqrt_1_ct + 1e-8))
+        u0 = u_b * sqrt_1_ct
 
-        sigma_z0 = D * 0.5 * cp.sqrt(uR / (u_inf + u0 + 1e-8))
+        sigma_z0 = D * 0.5 * cp.sqrt(uR / (u_b + u0 + 1e-8))
         sigma_y0 = sigma_z0 * cp.cos(yaw_)
 
         sqrt2 = cp.float32(2.0 ** 0.5)
@@ -103,7 +104,7 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         ct: cp.ndarray,           # (P, T_src)
         ti_eff: cp.ndarray,       # (P, T_src, T_dst)
         yaw: cp.ndarray,          # (P, T_src) radians
-        u_inf: float,
+        u_inf: cp.ndarray,        # (P, T_src) local inflow at the source turbine
         rotor_diameter: float,
         x_i: cp.ndarray,          # (P, T_src) source x in wind frame
     ) -> cp.ndarray:               # (P, T_src, T_dst) lateral displacement
@@ -125,6 +126,7 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         ct_   = ct[:, :, None]
         yaw_  = yaw_int[:, :, None]
         xi_   = x_i[:, :, None]
+        u_b   = u_inf[:, :, None]   # (P, T, 1) local inflow at source
 
         # Wake expansion in far wake
         ky = self.ka * ti_eff + self.kb   # (P, T, T)
@@ -137,7 +139,7 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         sigma_z = cp.where(dx >= x0, sigma_z, sigma_z0)
 
         # Auxiliary scalars for far-wake log formula
-        C0 = 1.0 - u0 / u_inf                        # (P, T, 1)
+        C0 = 1.0 - u0 / (u_b + 1e-8)                  # (P, T, 1)
         M0 = C0 * (2.0 - C0)
         E0 = C0**2 - 3.0 * np.exp(1.0/12.0) * C0 + 3.0 * np.exp(1.0/3.0)
 

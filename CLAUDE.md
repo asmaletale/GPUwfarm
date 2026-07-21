@@ -2,17 +2,22 @@
 
 ## Python Interpreter
 
-Default interpreter for this project (CUDA 12.6 laptop):
+Default interpreter for this project (CUDA 12.6 laptop), located under the
+current user's profile directory as `venv311pytorchcuda`:
 
 ```
-C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe
+%USERPROFILE%\PycharmProjects\venv311pytorchcuda\Scripts\python.exe
 ```
+
+This path is user-specific — resolve `%USERPROFILE%` (PowerShell: `$env:USERPROFILE`)
+for the current machine rather than hardcoding a username, since this repo is used
+across multiple machines/user accounts.
 
 Run tests and scripts with this interpreter:
 
-```bash
-& "C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m pytest packages/gpuwfarm-core -v
-& "C:\Users\alari\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m gpuwfarm_opt.main
+```powershell
+& "$env:USERPROFILE\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m pytest packages/gpuwfarm-core -v
+& "$env:USERPROFILE\PycharmProjects\venv311pytorchcuda\Scripts\python.exe" -m gpuwfarm_opt.main
 ```
 
 ## Project Purpose

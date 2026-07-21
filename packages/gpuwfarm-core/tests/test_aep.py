@@ -55,6 +55,31 @@ class TestWindRose:
         conds = list(rose.conditions())
         assert len(conds) == 12   # 12 dirs × 1 speed
 
+    def test_flat_conditions_matches_iterator_count(self):
+        """flat_conditions() must agree with conditions() when no bin is zero-freq."""
+        rose = WindRose.default_12sector()
+        wd_rad, ws, freq, ti = rose.flat_conditions()
+        assert wd_rad.shape == ws.shape == freq.shape == ti.shape == (12,)
+        assert abs(float(freq.sum()) - 1.0) < 1e-4
+
+    def test_flat_conditions_drops_zero_freq_bins(self):
+        """Bins with freq <= 1e-9 must be filtered out, mirroring conditions()'s skip."""
+        dirs   = np.array([0.0, 90.0, 180.0], dtype=np.float32)
+        speeds = np.array([9.0], dtype=np.float32)
+        freq_table = np.array([[0.5], [0.0], [0.5]], dtype=np.float32)
+        rose = WindRose.from_uniform_ti(dirs, speeds, freq_table)
+
+        wd_rad, ws, freq, ti = rose.flat_conditions()
+        assert wd_rad.shape == (2,), "the zero-freq 90 deg bin must be dropped"
+        assert np.allclose(sorted(freq.tolist()), [0.5, 0.5])
+
+    def test_flat_conditions_is_cached(self):
+        """Repeated calls (once per GA generation) must return the same cached arrays."""
+        rose = WindRose.default_12sector_multispeed()
+        first = rose.flat_conditions()
+        second = rose.flat_conditions()
+        assert first[0] is second[0], "flat_conditions() should memoize, not re-flatten"
+
 
 class TestFarmEvaluatorAEP:
 
@@ -116,3 +141,48 @@ class TestFarmEvaluatorAEP:
         rose = WindRose.default_12sector_multispeed()
         aep  = float(cp.asnumpy(ev.evaluate(pop, rose))[0])
         assert 1e6 < aep < 1e9, f"Single turbine AEP {aep:.3e} out of expected range"
+
+    def test_findex_batched_matches_sum_of_single_conditions(self):
+        """
+        The findex-vectorized evaluate() (batched over the whole wind rose in one
+        tensor op, see farm_evaluator.py) must equal the linear sum of evaluate()
+        called once per individual wind condition -- this catches any cross-talk
+        introduced by folding (P, F) into a single batch axis (e.g. a wrong
+        reshape order mixing up which findex row belongs to which population row).
+        """
+        ev, fc = self._make_simple_farm(n_turbines=3)
+        pop    = self._grid_pop(fc, P=4)
+
+        dirs   = np.array([0.0, 60.0, 150.0], dtype=np.float32)
+        speeds = np.array([7.0, 11.0], dtype=np.float32)
+        freq_table = np.array([[0.10, 0.25], [0.15, 0.20], [0.05, 0.25]], dtype=np.float32)
+        rose_multi = WindRose.from_uniform_ti(dirs, speeds, freq_table, ti_ambient=0.06)
+
+        aep_batched = cp.asnumpy(ev.evaluate(pop, rose_multi))   # (P,)
+
+        aep_summed = np.zeros(4, dtype=np.float32)
+        for i, wd in enumerate(dirs):
+            for j, ws in enumerate(speeds):
+                rose_single = WindRose.from_uniform_ti(
+                    wind_dirs=np.array([wd], dtype=np.float32),
+                    wind_speeds=np.array([ws], dtype=np.float32),
+                    freq_table=np.array([[1.0]], dtype=np.float32),
+                    ti_ambient=0.06,
+                )
+                aep_single = cp.asnumpy(ev.evaluate(pop, rose_single))
+                aep_summed += aep_single * freq_table[i, j]
+
+        assert np.allclose(aep_batched, aep_summed, rtol=1e-4), (
+            f"Batched findex AEP {aep_batched} != per-condition sum {aep_summed}"
+        )
+
+    def test_findex_batched_per_turbine_matches_farm_total(self):
+        """per_turbine=True output summed over turbines must equal the farm-level AEP."""
+        ev, fc = self._make_simple_farm(n_turbines=4)
+        pop    = self._grid_pop(fc, P=3)
+        rose   = WindRose.default_12sector_multispeed()
+
+        aep_farm = cp.asnumpy(ev.evaluate(pop, rose, per_turbine=False))       # (P,)
+        aep_per_turbine = cp.asnumpy(ev.evaluate(pop, rose, per_turbine=True))  # (P, T)
+
+        assert np.allclose(aep_farm, aep_per_turbine.sum(axis=1), rtol=1e-4)

@@ -43,7 +43,9 @@ class CrespoHernandez(BaseWakeTurbulence):
         self,
         dx: cp.ndarray,             # (P, T_src, T_dst) downstream distance (m)
         axial_induction: cp.ndarray,  # (P, T_src) induction factor of each src turbine
-        ambient_ti: float,
+        ambient_ti: cp.ndarray | float,  # scalar, or broadcastable to (P, 1, 1) when
+                                          # ambient TI varies per batch row (e.g. per
+                                          # findex in FarmEvaluator's flattened wind rose)
         rotor_diameter: float,
     ) -> cp.ndarray:                  # (P, T_src, T_dst) wake-added TI
         """

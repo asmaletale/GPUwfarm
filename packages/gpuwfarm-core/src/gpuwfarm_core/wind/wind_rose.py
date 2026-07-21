@@ -19,7 +19,7 @@ Extensions beyond FLORIS:
 """
 from __future__ import annotations
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -40,6 +40,13 @@ class WindRose:
     wind_speeds: np.ndarray   # m/s
     freq_table:  np.ndarray   # (n_wd, n_ws), sums to 1
     ti_table:    np.ndarray   # (n_wd, n_ws)
+
+    # Cache for flat_conditions() -- not part of the dataclass's identity/repr,
+    # just a memo so FarmEvaluator.evaluate() (called once per GA generation)
+    # doesn't re-flatten/re-filter the same (wd, ws) grid every time.
+    _flat_cache: Optional[tuple] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         assert self.freq_table.shape == (len(self.wind_dirs), len(self.wind_speeds)), \
@@ -63,6 +70,33 @@ class WindRose:
         for i, wd in enumerate(self.wind_dirs):
             for j, ws in enumerate(self.wind_speeds):
                 yield np.deg2rad(wd), ws, self.freq_table[i, j], self.ti_table[i, j]
+
+    def flat_conditions(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Flatten the (n_wd, n_ws) grid into a single `findex` axis, mirroring
+        FLORIS's own flattening of wind conditions into `n_findex` (see
+        floris/wind_data.py). Bins with freq <= 1e-9 are dropped -- same
+        skip `conditions()` callers apply manually.
+
+        This lets FarmEvaluator.evaluate() batch every wind condition as one
+        extra tensor axis instead of a Python loop over conditions().
+
+        Returns:
+            wd_rad, ws, freq, ti -- each (n_findex,) float32, flattened in the
+            same (wd outer, ws inner) order as conditions().
+        """
+        if self._flat_cache is None:
+            n_wd, n_ws = len(self.wind_dirs), len(self.wind_speeds)
+            wd_rad_grid = np.repeat(np.deg2rad(self.wind_dirs).astype(np.float32), n_ws)
+            ws_grid     = np.tile(self.wind_speeds.astype(np.float32), n_wd)
+            freq_flat   = self.freq_table.astype(np.float32).reshape(-1)
+            ti_flat     = self.ti_table.astype(np.float32).reshape(-1)
+
+            mask = freq_flat > 1e-9
+            self._flat_cache = (
+                wd_rad_grid[mask], ws_grid[mask], freq_flat[mask], ti_flat[mask]
+            )
+        return self._flat_cache
 
     # ── Factory: uniform TI per-sector ────────────────────────────────
 

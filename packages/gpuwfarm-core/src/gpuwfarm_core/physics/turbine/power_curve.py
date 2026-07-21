@@ -23,36 +23,18 @@ Built-in dataset: NREL 5 MW reference turbine (Jonkman et al. 2009)
     https://www.nrel.gov/docs/fy09osti/38060.pdf  Table 3-1 and Fig. 3-2
 """
 from __future__ import annotations
+import pathlib
 import numpy as np
 import cupy as cp
+import yaml
 from dataclasses import dataclass, field
 from typing import Optional
 
 
-# ──────────────────────────────────────────────────────────────────────
-# NREL 5 MW reference turbine tables
-# Source: Jonkman et al. 2009, NREL/TP-500-38060, Table 3-1
-# ──────────────────────────────────────────────────────────────────────
-_NREL5MW_WIND_SPEEDS = np.array([
-    3.0,  4.0,  5.0,  6.0,  7.0,  8.0,  9.0,
-    10.0, 11.0, 11.4, 12.0, 13.0, 14.0, 15.0,
-    16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0,
-    23.0, 24.0, 25.0,
-], dtype=np.float32)
-
-_NREL5MW_POWER_KW = np.array([
-    40.0,   177.7,  402.2,  737.6, 1162.7, 1591.7, 2030.5,
-    2536.3, 3000.0, 5000.0, 5000.0, 5000.0, 5000.0, 5000.0,
-    5000.0, 5000.0, 5000.0, 5000.0, 5000.0, 5000.0, 5000.0,
-    5000.0, 5000.0, 5000.0,
-], dtype=np.float32)
-
-_NREL5MW_CT = np.array([
-    0.99,  0.99,  0.97,  0.92,  0.86,  0.80,  0.76,
-    0.73,  0.72,  0.73,  0.73,  0.70,  0.65,  0.60,
-    0.55,  0.50,  0.46,  0.42,  0.39,  0.36,  0.34,
-    0.32,  0.30,  0.28,
-], dtype=np.float32)
+# Bundled default turbine — FLORIS's own nrel_5MW.yaml (turbine_library
+# format). Single source of truth; see config.py module docstring.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[6]
+_DEFAULT_TURBINE_YAML = _REPO_ROOT / "examples" / "nrel_5MW.yaml"
 
 
 @dataclass
@@ -65,12 +47,22 @@ class TurbineData:
     cosine_loss_exponent_yaw: float = 1.88  # CosineLossTurbine default
 
     @classmethod
-    def nrel_5mw(cls) -> "TurbineData":
+    def from_turbine_yaml(cls, path: str | pathlib.Path) -> "TurbineData":
+        """Parse a FLORIS turbine_library/*.yaml file's power_thrust_table."""
+        with open(path) as f:
+            t = yaml.safe_load(f)
+        pt = t["power_thrust_table"]
         return cls(
-            wind_speeds=_NREL5MW_WIND_SPEEDS.copy(),
-            power_kw=_NREL5MW_POWER_KW.copy(),
-            ct_values=_NREL5MW_CT.copy(),
+            wind_speeds=np.array(pt["wind_speed"], dtype=np.float32),
+            power_kw=np.array(pt["power"], dtype=np.float32),
+            ct_values=np.array(pt["thrust_coefficient"], dtype=np.float32),
+            ref_air_density=float(pt.get("ref_air_density", 1.225)),
+            cosine_loss_exponent_yaw=float(pt.get("cosine_loss_exponent_yaw", 1.88)),
         )
+
+    @classmethod
+    def nrel_5mw(cls) -> "TurbineData":
+        return cls.from_turbine_yaml(_DEFAULT_TURBINE_YAML)
 
 
 class TabulatedPowerCurve:

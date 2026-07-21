@@ -67,23 +67,24 @@ class FarmEvaluator:
     # Main entry point
     # ──────────────────────────────────────────────────────────────────
 
-    def evaluate(self, pop: cp.ndarray, wind_rose: WindRose) -> cp.ndarray:
+    def evaluate(self, pop: cp.ndarray, wind_rose: WindRose, per_turbine: bool = False) -> cp.ndarray:
         """
         Compute AEP for every individual in the population.
 
         Args:
-            pop:       (P, T, 3) CuPy float32 — x, y, yaw
-            wind_rose: WindRose object
+            pop:         (P, T, 3) CuPy float32 — x, y, yaw
+            wind_rose:   WindRose object
+            per_turbine: if True, do not sum over turbines
 
         Returns:
-            (P,) CuPy float32 — AEP in kWh
+            (P,) CuPy float32 AEP in kWh, or (P, T) if per_turbine=True
         """
         P, T, _ = pop.shape
         x   = pop[:, :, 0]   # (P, T)
         y   = pop[:, :, 1]   # (P, T)
         yaw = pop[:, :, 2]   # (P, T) radians
 
-        total_AEP = cp.zeros(P, dtype=cp.float32)
+        total_AEP = cp.zeros((P, T) if per_turbine else P, dtype=cp.float32)
 
         for wd_rad, ws_float, freq, ti_float in wind_rose.conditions():
             if freq < 1e-9:
@@ -143,7 +144,11 @@ class FarmEvaluator:
                 yaw=yaw,
                 u_inf=float(ws),
                 rotor_diameter=self.D,
-                x_i=xw,
+                # dx is already relative (xw[dst]-xw[src]), so the source sits at
+                # relative position 0 here, not its absolute xw -- passing xw
+                # corrupts near/far-wake boundary detection for any source not at
+                # x=0 (e.g. a middle turbine in a row of 3+).
+                x_i=cp.zeros_like(xw),
             )
 
             # 6. Velocity deficit: (P, T_src, T_dst)
@@ -156,7 +161,7 @@ class FarmEvaluator:
                 yaw=yaw,
                 u_inf=float(ws),
                 rotor_diameter=self.D,
-                x_i=xw,
+                x_i=cp.zeros_like(xw),   # see note above deflection_model.compute()
             )
 
             # Apply downstream mask (deficit only counts downstream)
@@ -170,7 +175,10 @@ class FarmEvaluator:
             u_eff    = ws * (cp.float32(1.0) - total_deficit)    # (P, T)
             power_kw = self.power_curve.power_gpu(u_eff, yaw)    # (P, T) kW
 
-            farm_power = cp.sum(power_kw, axis=1)    # (P,) kW
-            total_AEP += farm_power * cp.float32(freq) * cp.float32(8760.0)
+            if per_turbine:
+                total_AEP += power_kw * cp.float32(freq) * cp.float32(8760.0)
+            else:
+                farm_power = cp.sum(power_kw, axis=1)    # (P,) kW
+                total_AEP += farm_power * cp.float32(freq) * cp.float32(8760.0)
 
         return total_AEP

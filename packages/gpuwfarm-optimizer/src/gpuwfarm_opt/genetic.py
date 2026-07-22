@@ -62,6 +62,12 @@ class GeneticAlgorithm:
 
         self._max_yaw = np.deg2rad(ga_cfg.max_yaw_deg)
 
+        # Which decision variables the search touches (see GAConfig.optimize).
+        # "both" → x, y, yaw   "layout" → x, y only   "yaw" → yaw only
+        self.optimize        = ga_cfg.optimize
+        self._optimize_layout = ga_cfg.optimize in ("both", "layout")
+        self._optimize_yaw    = ga_cfg.optimize in ("both", "yaw")
+
         # Multi-objective
         self.cost_cfg        = cost_cfg or CostConfig()
         self.objectives_mode = objectives_mode
@@ -84,18 +90,52 @@ class GeneticAlgorithm:
         """
         Return (P, T, 3) initial population.
 
-        If seed_layout (N, 2) is provided the first individual is initialised
-        from those positions with zero yaw; the rest are randomised as usual.
+        The decision variables that are *not* being optimised (see
+        GAConfig.optimize) are frozen at initialisation and left untouched by
+        the mutation / crossover / projection operators:
+
+        - ``optimize="both"``   — positions and yaw are both randomised.
+        - ``optimize="layout"`` — positions randomised, yaw frozen at 0.
+        - ``optimize="yaw"``    — yaw randomised, positions frozen to a single
+          shared layout (the seed layout, or one random feasible layout when
+          no seed is supplied) so every individual shares the same turbine
+          positions and only the steering angles differ.
+
+        If seed_layout (N, 2) is provided and positions are being optimised,
+        the first individual is initialised from those positions with zero yaw;
+        the rest are randomised as usual.
         """
         P, T = self.ga_cfg.pop_size, self.farm_cfg.n_turbines
         pop  = cp.zeros((P, T, 3), dtype=cp.float32)
 
-        pop[:, :, 0] = cp.random.uniform(0, self.farm_cfg.area_width,  (P, T))
-        pop[:, :, 1] = cp.random.uniform(0, self.farm_cfg.area_height, (P, T))
-        pop[:, :, 2] = cp.random.uniform(-self._max_yaw, self._max_yaw, (P, T))
+        # ── Positions ───────────────────────────────────────────────────
+        if self._optimize_layout:
+            pop[:, :, 0] = cp.random.uniform(0, self.farm_cfg.area_width,  (P, T))
+            pop[:, :, 1] = cp.random.uniform(0, self.farm_cfg.area_height, (P, T))
+        else:
+            # yaw-only: one fixed layout shared by every individual.
+            if seed_layout is not None:
+                base = cp.asarray(seed_layout[:T, :2].astype(np.float32))  # (T, 2)
+            else:
+                # No seed given — draw a single random feasible layout and
+                # project it into the feasible set, then freeze it.
+                rand = cp.zeros((1, T, 2), dtype=cp.float32)
+                rand[0, :, 0] = cp.random.uniform(0, self.farm_cfg.area_width,  (T,))
+                rand[0, :, 1] = cp.random.uniform(0, self.farm_cfg.area_height, (T,))
+                base = self.projection.project(rand)[0]  # (T, 2)
+            pop[:, :, 0] = base[:, 0][cp.newaxis, :]
+            pop[:, :, 1] = base[:, 1][cp.newaxis, :]
 
-        if seed_layout is not None:
-            pop[0, :, :2] = cp.asarray(seed_layout[:T].astype(np.float32))
+        # ── Yaw ─────────────────────────────────────────────────────────
+        if self._optimize_yaw:
+            pop[:, :, 2] = cp.random.uniform(-self._max_yaw, self._max_yaw, (P, T))
+        # else: yaw stays 0 (layout-only: no wake steering)
+
+        # ── Seed the first individual from an existing layout ────────────
+        # Only meaningful when positions are free; in yaw-only mode every
+        # individual already carries the seed layout.
+        if seed_layout is not None and self._optimize_layout:
+            pop[0, :, :2] = cp.asarray(seed_layout[:T, :2].astype(np.float32))
             pop[0, :,  2] = 0.0
 
         return pop
@@ -106,6 +146,9 @@ class GeneticAlgorithm:
 
     def project(self, pop: cp.ndarray) -> cp.ndarray:
         """Apply the feasibility projection chain to positions."""
+        # yaw-only: positions are frozen and already feasible — nothing to repair.
+        if not self._optimize_layout:
+            return pop
         xy = pop[:, :, :2]
         xy = self.projection.project(xy)
         pop = pop.copy()
@@ -169,20 +212,22 @@ class GeneticAlgorithm:
 
         pop = pop.copy()
 
-        # Position mutation
-        noise_xy  = cp.random.normal(0, 50.0, (P, T, 2)).astype(cp.float32)
-        mask_xy   = (cp.random.rand(P, T, 2) < rate).astype(cp.float32)
-        pop[:, :, :2] += mask_xy * noise_xy
+        # Position mutation (skipped in yaw-only mode so positions stay frozen)
+        if self._optimize_layout:
+            noise_xy  = cp.random.normal(0, 50.0, (P, T, 2)).astype(cp.float32)
+            mask_xy   = (cp.random.rand(P, T, 2) < rate).astype(cp.float32)
+            pop[:, :, :2] += mask_xy * noise_xy
+            # Clip positions to domain
+            pop[:, :, 0] = cp.clip(pop[:, :, 0], 0, self.farm_cfg.area_width)
+            pop[:, :, 1] = cp.clip(pop[:, :, 1], 0, self.farm_cfg.area_height)
 
-        # Yaw mutation (σ = 3°)
-        noise_yaw = cp.random.normal(0, np.deg2rad(3), (P, T)).astype(cp.float32)
-        mask_yaw  = (cp.random.rand(P, T) < rate).astype(cp.float32)
-        pop[:, :, 2] += mask_yaw * noise_yaw
-
-        # Clip to domain
-        pop[:, :, 0] = cp.clip(pop[:, :, 0], 0, self.farm_cfg.area_width)
-        pop[:, :, 1] = cp.clip(pop[:, :, 1], 0, self.farm_cfg.area_height)
-        pop[:, :, 2] = cp.clip(pop[:, :, 2], -self._max_yaw, self._max_yaw)
+        # Yaw mutation (σ = 3°; skipped in layout-only mode so yaw stays 0)
+        if self._optimize_yaw:
+            noise_yaw = cp.random.normal(0, np.deg2rad(3), (P, T)).astype(cp.float32)
+            mask_yaw  = (cp.random.rand(P, T) < rate).astype(cp.float32)
+            pop[:, :, 2] += mask_yaw * noise_yaw
+            # Clip yaw to steering limits
+            pop[:, :, 2] = cp.clip(pop[:, :, 2], -self._max_yaw, self._max_yaw)
 
         return pop
 

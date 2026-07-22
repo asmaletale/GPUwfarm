@@ -17,7 +17,6 @@ Physics sources:
 #todo: verify that aep is consistent with floris and that the setup is the same (config-wise)
 #todo: add visualization like in legacy code
 #todo: add bathymetry
-#todo: include option to switch off yaw optimization (only layout) or switch off layout optimization (only yaw)
 #todo: visualize min lcoe and min vi layouts on the pareto front
 #todo: add wake visualization like in floris (wake velocity deficit, turbulence intensity)
 #todo: add rotor discretization (like in floris) to have more accurate wake modeling and power calculation
@@ -64,6 +63,10 @@ def parse_args():
                    help="Path to a FLORIS v4 input YAML; overrides --combination, "
                         "--turbines, and wind-rose flags")
     p.add_argument("--combination",  default="SOSFS", choices=["SOSFS", "FLS", "MAX"])
+    p.add_argument("--optimize",     default="both", choices=["both", "layout", "yaw"],
+                   help="Decision variables to optimise: 'both' (positions + yaw), "
+                        "'layout' (positions only, yaw fixed at 0), or 'yaw' "
+                        "(yaw only, positions fixed to the seed/loaded layout)")
     p.add_argument("--generations",  type=int,   default=150)
     p.add_argument("--pop",          type=int,   default=256)
     p.add_argument("--turbines",     type=int,   default=20)
@@ -138,7 +141,8 @@ def main() -> None:
         turbine_data = inp["turbine_data"]
         wind_rose    = inp["wind_rose"]
         seed_layout  = inp["layout_xy"]
-        ga_cfg = GAConfig(pop_size=args.pop, n_generations=args.generations)
+        ga_cfg = GAConfig(pop_size=args.pop, n_generations=args.generations,
+                          optimize=args.optimize)
         print(f"Loaded FLORIS YAML: {args.floris_yaml}")
         print(f"Wind rose: {len(wind_rose.wind_dirs)} dirs × "
               f"{len(wind_rose.wind_speeds)} speeds")
@@ -148,7 +152,8 @@ def main() -> None:
         farm_cfg    = FarmConfig(n_turbines=args.turbines)
         turbine_cfg = TurbineConfig()
         turbine_data = TurbineData.nrel_5mw()
-        ga_cfg      = GAConfig(pop_size=args.pop, n_generations=args.generations)
+        ga_cfg      = GAConfig(pop_size=args.pop, n_generations=args.generations,
+                               optimize=args.optimize)
 
         if args.multispeed:
             wind_rose = WindRose.default_12sector_multispeed()
@@ -181,6 +186,7 @@ def main() -> None:
     print(f"  Population:  {ga_cfg.pop_size}")
     print(f"  Generations: {ga_cfg.n_generations}")
     print(f"  Wake combo:  {wake_cfg.combination}")
+    print(f"  Optimise:    {ga_cfg.optimize}")
     print(f"  Multi-obj:   {args.multi_objective}")
     print(f"  GPU:         {cp.cuda.Device().id}\n")
 

@@ -87,7 +87,13 @@ class FarmEvaluator:
     # Main entry point
     # ──────────────────────────────────────────────────────────────────
 
-    def evaluate(self, pop: cp.ndarray, wind_rose: WindRose, per_turbine: bool = False) -> cp.ndarray:
+    def evaluate(
+        self,
+        pop: cp.ndarray,
+        wind_rose: WindRose,
+        per_turbine: bool = False,
+        zero_yaw: bool = False,
+    ) -> cp.ndarray:
         """
         Compute AEP for every individual in the population.
 
@@ -95,6 +101,11 @@ class FarmEvaluator:
             pop:         (P, T, 3) CuPy float32 — x, y, yaw
             wind_rose:   WindRose object
             per_turbine: if True, do not sum over turbines
+            zero_yaw:    caller guarantees pop[:, :, 2] is identically 0 (e.g. a
+                         layout-only optimisation). Lets the deflection model be
+                         skipped — see `skip_deflection` below. Never inferred
+                         from the data: `cp.all(yaw == 0)` would force a device
+                         sync inside the fitness loop.
 
         Returns:
             (P,) CuPy float32 AEP in kWh, or (P, T) if per_turbine=True
@@ -154,6 +165,14 @@ class FarmEvaluator:
         # freestream, exactly reproducing the old one-shot approximation.
         u_src = cp.broadcast_to(ws_b[:, None], (B, T)).copy()   # (B, T) local inflow at each source
 
+        # With yaw ≡ 0 every deflection term vanishes identically: theta_c0 ∝ yaw
+        # (wake_deflection/gauss.py), so delta0 = mid_term = 0 and all that survives
+        # is the ad + bd*dx offset. When those are zero too — the FLORIS default —
+        # the model just fills an all-zero (B, T, T) tensor. A Python scalar
+        # broadcasts into the deficit's (dy - delta) instead, with no allocation and
+        # no 54 MB read per Jacobi pass: measured ~40% off evaluate() at P=256, T=20.
+        skip_deflection = zero_yaw and self.wake_cfg.ad == 0.0 and self.wake_cfg.bd == 0.0
+
         for _ in range(N_JACOBI_ITERS):
             # 3. Ct / axial induction from local (waked) source inflow
             ct = self.power_curve.ct_gpu(u_src)                # (B, T)
@@ -195,19 +214,22 @@ class FarmEvaluator:
             ).copy()   # (B, T_src, T_dst) — TI at src i, repeated across dst dimension
 
             # 5. Wake deflection delta: (B, T_src, T_dst)
-            delta = self.deflection_model.compute(
-                dx=dx_safe,
-                ct=ct,
-                ti_eff=ti_eff_pairs,
-                yaw=yaw_b,
-                u_inf=u_src,
-                rotor_diameter=self.D,
-                # dx is already relative (xw[dst]-xw[src]), so the source sits at
-                # relative position 0 here, not its absolute xw -- passing xw
-                # corrupts near/far-wake boundary detection for any source not at
-                # x=0 (e.g. a middle turbine in a row of 3+).
-                x_i=cp.zeros_like(xw),
-            )
+            if skip_deflection:
+                delta = cp.float32(0.0)
+            else:
+                delta = self.deflection_model.compute(
+                    dx=dx_safe,
+                    ct=ct,
+                    ti_eff=ti_eff_pairs,
+                    yaw=yaw_b,
+                    u_inf=u_src,
+                    rotor_diameter=self.D,
+                    # dx is already relative (xw[dst]-xw[src]), so the source sits at
+                    # relative position 0 here, not its absolute xw -- passing xw
+                    # corrupts near/far-wake boundary detection for any source not at
+                    # x=0 (e.g. a middle turbine in a row of 3+).
+                    x_i=cp.zeros_like(xw),
+                )
 
             # 6. Velocity deficit: (B, T_src, T_dst)
             deficit = self.velocity_model.compute(

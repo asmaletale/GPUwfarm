@@ -163,7 +163,12 @@ initial = 0.1, constant = 0.9, ai = 0.8, downstream = -0.32
 - **Never** call `cp.asnumpy()` or `cp.get()` inside the fitness evaluation loop.
 - **Never** move wake model parameters to GPU inside the per-generation loop — upload once at init.
 - All population operations must remain on `(P, T)` or `(P, T, T)` CuPy tensors.
-- Use `cp.interp` for power curve lookup (not scipy).
+- Use `cp.interp` for power curve lookup (not scipy) — but **cast the result back
+  to `float32`**: `cp.interp` mirrors `np.interp` and always returns float64, which
+  otherwise promotes Ct → TI → deflection → deficit and every `(B, T, T)` tensor to
+  float64 (~2.5x slower end-to-end, no accuracy gain). Same trap for any
+  `np.<func>(...)` **scalar** in a kernel: numpy scalars upcast CuPy float32 arrays,
+  Python floats do not. Guarded by `test_power_curve.py::test_float32_is_not_promoted`.
 
 ## Wake Combination Selection
 

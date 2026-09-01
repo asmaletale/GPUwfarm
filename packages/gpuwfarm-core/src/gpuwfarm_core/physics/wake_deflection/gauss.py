@@ -141,7 +141,11 @@ class GaussVelocityDeflection(BaseWakeDeflection):
         # Auxiliary scalars for far-wake log formula
         C0 = 1.0 - u0 / (u_b + 1e-8)                  # (P, T, 1)
         M0 = C0 * (2.0 - C0)
-        E0 = C0**2 - 3.0 * np.exp(1.0/12.0) * C0 + 3.0 * np.exp(1.0/3.0)
+        # float(): np.exp returns a numpy float64 *scalar*, and numpy scalars upcast
+        # CuPy float32 arrays -- one of these silently promotes the whole (B, T, T)
+        # chain to float64. Python floats are weak scalars and keep it in float32.
+        # (Same trap as cp.interp in turbine/power_curve.py; see CLAUDE.md GPU Rules.)
+        E0 = C0**2 - 3.0 * float(np.exp(1.0/12.0)) * C0 + 3.0 * float(np.exp(1.0/3.0))
 
         sqrt_M0 = cp.sqrt(cp.clip(M0, 1e-12, None))
 

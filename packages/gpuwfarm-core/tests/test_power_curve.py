@@ -41,6 +41,18 @@ class TestTabulatedPowerCurve:
         u_gpu = cp.array([[u]], dtype=cp.float32)
         return float(cp.asnumpy(self.pc.ct_gpu(u_gpu))[0, 0])
 
+    def test_float32_is_not_promoted(self):
+        """
+        cp.interp returns float64 like np.interp. If the cast is dropped, Ct and
+        power silently promote every downstream (B, T, T) wake tensor to float64
+        -- ~2.5x slower end-to-end, with no accuracy gain.
+        """
+        u   = cp.array([[8.0]], dtype=cp.float32)
+        yaw = cp.zeros((1, 1), dtype=cp.float32)
+        assert self.pc.ct_gpu(u).dtype == cp.float32
+        assert self.pc.axial_induction_gpu(u).dtype == cp.float32
+        assert self.pc.power_gpu(u, yaw).dtype == cp.float32
+
     def test_rated_power(self):
         """Power at rated speed (11.4 m/s) should be 5000 kW."""
         p = self._scalar_power(11.4)
@@ -53,9 +65,12 @@ class TestTabulatedPowerCurve:
 
     def test_ct_clipped(self):
         """Ct must be within [0.0001, 0.9999]."""
+        # Bounds taken in float32: the curve is float32, and float32(0.0001) is
+        # 9.9999997e-05, a hair under the float64 literal.
+        lo, hi = float(np.float32(0.0001)), float(np.float32(0.9999))
         for u in [0.0, 3.0, 8.0, 25.0, 50.0]:
             ct = self._scalar_ct(u)
-            assert 0.0001 <= ct <= 0.9999, f"Ct={ct:.6f} out of bounds at u={u}"
+            assert lo <= ct <= hi, f"Ct={ct:.8f} out of bounds at u={u}"
 
     def test_yaw_reduces_power(self):
         """Yawed turbine produces less power than aligned."""

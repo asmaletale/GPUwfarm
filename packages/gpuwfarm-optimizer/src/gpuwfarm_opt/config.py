@@ -18,3 +18,10 @@ class GAConfig:
     gene_swap_rate:      float = 0.0   # per-turbine swap probability (0 = use 1/T)
     elite:          int   = 6
     max_yaw_deg:    float = 30.0  # degrees
+    optimize:       str   = "both"  # "both" | "layout" (yaw fixed at 0) | "yaw" (layout fixed)
+
+    def __post_init__(self) -> None:
+        if self.optimize not in ("both", "layout", "yaw"):
+            raise ValueError(
+                f"optimize must be 'both', 'layout' or 'yaw', got {self.optimize!r}"
+            )

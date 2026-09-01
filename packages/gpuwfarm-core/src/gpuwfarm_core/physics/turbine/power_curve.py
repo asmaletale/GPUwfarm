@@ -113,8 +113,12 @@ class TabulatedPowerCurve:
             Ct, clipped to [0.0001, 0.9999] — same as FLORIS
         """
         u_corr = self._density_corrected_velocity(u_eff)
-        ct = cp.interp(u_corr, self._ws_gpu, self._ct_gpu)
-        return cp.clip(ct, 0.0001, 0.9999)
+        # .astype(float32): cp.interp mirrors np.interp and always returns float64.
+        # Without the cast, Ct -- and through it axial induction, TI, deflection,
+        # deficit and every (B, T, T) tensor downstream -- silently runs in float64,
+        # doubling memory traffic for no accuracy gain (the tables are float32).
+        ct = cp.interp(u_corr, self._ws_gpu, self._ct_gpu).astype(cp.float32)
+        return cp.clip(ct, cp.float32(0.0001), cp.float32(0.9999))
 
     # ------------------------------------------------------------------
     # Axial induction (SimpleTurbine.axial_induction)
@@ -143,6 +147,6 @@ class TabulatedPowerCurve:
         u_corr = self._density_corrected_velocity(u_eff)
         # FLORIS uses fill_value=0.0 for out-of-bounds (SimpleTurbine.power)
         p_base = cp.interp(u_corr, self._ws_gpu, self._pow_gpu,
-                           left=cp.float32(0.0), right=cp.float32(0.0))
+                           left=cp.float32(0.0), right=cp.float32(0.0)).astype(cp.float32)
         yaw_loss = cp.cos(yaw) ** self.td.cosine_loss_exponent_yaw
         return p_base * yaw_loss

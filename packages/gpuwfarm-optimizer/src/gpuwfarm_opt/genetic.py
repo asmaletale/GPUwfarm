@@ -38,6 +38,9 @@ class GeneticAlgorithm:
     Population tensor: (P, T, 3) — [x, y, yaw_rad] per turbine.
     All P individuals are evaluated simultaneously on GPU.
 
+    ``GAConfig.optimize`` picks the decision variables: "both" (default),
+    "layout" (yaw pinned to 0) or "yaw" (one fixed layout for all individuals).
+
     Multi-objective: Pareto-based selection using rank + crowding distance.
     Full history saved to HDF5 via AsyncPopulationLogger for post-processing.
     """
@@ -61,6 +64,10 @@ class GeneticAlgorithm:
         self.wind_rose  = wind_rose
 
         self._max_yaw = np.deg2rad(ga_cfg.max_yaw_deg)
+
+        # Which decision variables are free (GAConfig.optimize)
+        self.opt_layout = ga_cfg.optimize in ("both", "layout")
+        self.opt_yaw    = ga_cfg.optimize in ("both", "yaw")
 
         # Multi-objective
         self.cost_cfg        = cost_cfg or CostConfig()
@@ -86,17 +93,26 @@ class GeneticAlgorithm:
 
         If seed_layout (N, 2) is provided the first individual is initialised
         from those positions with zero yaw; the rest are randomised as usual.
+
+        In "yaw" mode the layout is not a decision variable: every individual
+        shares one fixed layout — the seed layout if given, otherwise a single
+        random (feasibility-repaired) one. In "layout" mode yaw stays 0.
         """
         P, T = self.ga_cfg.pop_size, self.farm_cfg.n_turbines
         pop  = cp.zeros((P, T, 3), dtype=cp.float32)
 
         pop[:, :, 0] = cp.random.uniform(0, self.farm_cfg.area_width,  (P, T))
         pop[:, :, 1] = cp.random.uniform(0, self.farm_cfg.area_height, (P, T))
-        pop[:, :, 2] = cp.random.uniform(-self._max_yaw, self._max_yaw, (P, T))
+        if self.opt_yaw:
+            pop[:, :, 2] = cp.random.uniform(-self._max_yaw, self._max_yaw, (P, T))
 
         if seed_layout is not None:
             pop[0, :, :2] = cp.asarray(seed_layout[:T].astype(np.float32))
             pop[0, :,  2] = 0.0
+
+        if not self.opt_layout:
+            # Fixed layout: repair it once here, since project() is a no-op after this.
+            pop[:, :, :2] = self.projection.project(pop[:1, :, :2])
 
         return pop
 
@@ -106,6 +122,8 @@ class GeneticAlgorithm:
 
     def project(self, pop: cp.ndarray) -> cp.ndarray:
         """Apply the feasibility projection chain to positions."""
+        if not self.opt_layout:
+            return pop  # positions never move — already repaired in init_population
         xy = pop[:, :, :2]
         xy = self.projection.project(xy)
         pop = pop.copy()
@@ -114,7 +132,9 @@ class GeneticAlgorithm:
 
     def evaluate(self, pop: cp.ndarray) -> cp.ndarray:
         """Return AEP (P,) for the full population."""
-        return self.evaluator.evaluate(pop, self.wind_rose)
+        # In "layout" mode the yaw column is 0 by construction, which lets the
+        # evaluator skip the wake-deflection model entirely.
+        return self.evaluator.evaluate(pop, self.wind_rose, zero_yaw=not self.opt_yaw)
 
     def select(self, pop: cp.ndarray, fitness: cp.ndarray) -> cp.ndarray:
         """Rank truncation: keep top POP_SIZE individuals."""
@@ -170,19 +190,19 @@ class GeneticAlgorithm:
         pop = pop.copy()
 
         # Position mutation
-        noise_xy  = cp.random.normal(0, 50.0, (P, T, 2)).astype(cp.float32)
-        mask_xy   = (cp.random.rand(P, T, 2) < rate).astype(cp.float32)
-        pop[:, :, :2] += mask_xy * noise_xy
+        if self.opt_layout:
+            noise_xy  = cp.random.normal(0, 50.0, (P, T, 2)).astype(cp.float32)
+            mask_xy   = (cp.random.rand(P, T, 2) < rate).astype(cp.float32)
+            pop[:, :, :2] += mask_xy * noise_xy
+            pop[:, :, 0] = cp.clip(pop[:, :, 0], 0, self.farm_cfg.area_width)
+            pop[:, :, 1] = cp.clip(pop[:, :, 1], 0, self.farm_cfg.area_height)
 
         # Yaw mutation (σ = 3°)
-        noise_yaw = cp.random.normal(0, np.deg2rad(3), (P, T)).astype(cp.float32)
-        mask_yaw  = (cp.random.rand(P, T) < rate).astype(cp.float32)
-        pop[:, :, 2] += mask_yaw * noise_yaw
-
-        # Clip to domain
-        pop[:, :, 0] = cp.clip(pop[:, :, 0], 0, self.farm_cfg.area_width)
-        pop[:, :, 1] = cp.clip(pop[:, :, 1], 0, self.farm_cfg.area_height)
-        pop[:, :, 2] = cp.clip(pop[:, :, 2], -self._max_yaw, self._max_yaw)
+        if self.opt_yaw:
+            noise_yaw = cp.random.normal(0, np.deg2rad(3), (P, T)).astype(cp.float32)
+            mask_yaw  = (cp.random.rand(P, T) < rate).astype(cp.float32)
+            pop[:, :, 2] += mask_yaw * noise_yaw
+            pop[:, :, 2] = cp.clip(pop[:, :, 2], -self._max_yaw, self._max_yaw)
 
         return pop
 

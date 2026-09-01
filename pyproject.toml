@@ -1,0 +1,6 @@
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+gpuwfarm-core = { workspace = true }
+gpuwfarm-optimizer = { workspace = true }

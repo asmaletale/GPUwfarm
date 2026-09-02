@@ -126,7 +126,18 @@ class TabulatedPowerCurve:
     # ------------------------------------------------------------------
 
     def axial_induction_gpu(self, u_eff: cp.ndarray) -> cp.ndarray:
-        ct = self.ct_gpu(u_eff)
+        return self.axial_induction_from_ct(self.ct_gpu(u_eff))
+
+    @staticmethod
+    def axial_induction_from_ct(ct: cp.ndarray) -> cp.ndarray:
+        """
+        Axial induction from an already-interpolated Ct.
+
+        Split out of axial_induction_gpu so a caller holding Ct does not pay for
+        a second cp.interp: the Jacobi loop in FarmEvaluator.evaluate() needs
+        both Ct and axial induction on every pass. The literals are Python
+        floats on purpose -- numpy scalars would promote ct to float64.
+        """
         return (1.0 - cp.sqrt(cp.clip(1.0 - ct, 0.0, 1.0))) / 2.0
 
     # ------------------------------------------------------------------

@@ -16,7 +16,9 @@ class GAConfig:
     mutation_rate:  float = 0.15
     crossover_rate:      float = 0.7   # probability a parent pair undergoes crossover
     gene_swap_rate:      float = 0.0   # per-turbine swap probability (0 = use 1/T)
-    elite:          int   = 6
+    sigma_xy:            float = 50.0  # position mutation step, metres (farm-scale dependent)
+    sigma_yaw_deg:       float = 3.0   # yaw mutation step, degrees
+    elite:          int   = 6     # unused: survival is an elitist (mu + lambda) merge
     max_yaw_deg:    float = 30.0  # degrees
     optimize:       str   = "both"  # "both" | "layout" (yaw fixed at 0) | "yaw" (layout fixed)
 

@@ -57,6 +57,57 @@ uv sync
 pip install -e packages/gpuwfarm-core -e packages/gpuwfarm-optimizer
 ```
 
+## Step-by-step interface
+
+`FarmEvaluator.evaluate()` and `GeneticAlgorithm.run()` are each just their own
+public stage methods called in order. Every stage is pure (no method assigns to
+`self`, apart from the logger lifecycle) and returns a real CuPy array — nothing
+is lazy, there is no graph to compile. Write the sequence out yourself when you
+want the intermediates or an extra step of your own; adding a procedure is one
+line that takes the previous return.
+
+Reference scripts at the repo root, meant to be read and stepped through:
+
+| Script | Shows |
+|---|---|
+| `example_core.py` | the AEP pipeline stage by stage, with shapes/dtypes annotated |
+| `example_optimizer.py` | the single-objective GA generation loop |
+| `example_optimizer_mo.py` | the NSGA-II loop (differs in three marked lines) |
+
+Evaluation stages (`gpuwfarm_core.physics.farm_evaluator`):
+
+```
+upload_conditions(rose)              → wd_rad, ws, freq, ti      (F,) device
+to_wind_frame(pop, wd, ws, ti)       → xw, yw, yaw, ws_b, ti_b   (B,T)/(B,), B = P*F
+pairwise_displacement(xw, yw)        → dx, dy, downstream        (B,T,T)
+effective_ti(ti_added, dx, dy, downstream, ti_b) → ti_eff        (B,T,T)
+update_inflow(ws_b, total_deficit)   → u_src                     (B,T)
+integrate_aep(power_kw, freq)        → aep                       (P,) or (P,T)
+```
+
+The four wake models were always directly callable (`ev.velocity_model.compute(...)`
+etc.); only this glue was hidden. `N_JACOBI_ITERS` is now the default of
+`evaluate(n_jacobi=...)`, so a hand-written loop sets its own pass count.
+
+Optimizer stages (`gpuwfarm_opt.genetic`) — all `(P,T,3) → (P,T,3)` unless noted:
+
+```
+init_population(seed_layout) / project(pop) / evaluate(pop) → aep (P,)
+compute_objectives(pop, aep)          → (P, 2) numpy, minimisation convention
+fast_nondominated_sort(objectives)    → ranks (P,), crowding distance (P,)
+tournament_aep(pop, aep)              → mating pool     (single-objective)
+tournament_pareto(pop, ranks, cd)     → mating pool     (NSGA-II)
+crossover(pop) / mutate(pop)          → offspring
+survive_aep(pop, aep, ch, aep_c)      → (pop, aep)               (mu + lambda)
+survive_pareto(pop, aep, obj, ch, aep_c, obj_c) → (pop, aep, obj) (mu + lambda)
+log(generation, pop, aep, objectives) / best(pop, aep, objectives)
+```
+
+Survival is the elitism: parents and offspring are merged to 2P and truncated
+back to P, so the incumbent can never be lost (`GAConfig.elite` is unused). Pass
+`history_file=` and use the GA as a context manager — the HDF5 writer thread needs
+closing, and the generation number you pass to `log()` is the dataset row address.
+
 ## Repository Layout
 
 ```

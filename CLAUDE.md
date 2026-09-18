@@ -101,7 +101,15 @@ crossover(pop) / mutate(pop)          → offspring
 survive_aep(pop, aep, ch, aep_c)      → (pop, aep)               (mu + lambda)
 survive_pareto(pop, aep, obj, ch, aep_c, obj_c) → (pop, aep, obj) (mu + lambda)
 log(generation, pop, aep, objectives) / best(pop, aep, objectives)
+log_evals(row, pop, aep, objectives)  → every evaluated genome (evals_file=)
 ```
+
+`log()` runs after `survive_*`, so it records the P survivors — the offspring
+that lose the merge are evaluated and then dropped. Pass `evals_file=` as well
+for the complete search record: `run()` writes row 0 = initial population and
+row g+1 = the offspring of generation g, i.e. exactly `P * (n_generations + 1)`
+rows, one per evaluator call. Same HDF5 schema as the history file, so
+`analyze_history.py` reads either.
 
 Survival is the elitism: parents and offspring are merged to 2P and truncated
 back to P, so the incumbent can never be lost (`GAConfig.elite` is unused). Pass

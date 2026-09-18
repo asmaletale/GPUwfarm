@@ -75,7 +75,11 @@ def parse_args():
     p.add_argument("--multi-objective", action="store_true",
                    help="Enable multi-objective optimization (LCOE + VI)")
     p.add_argument("--history-file", default="ga_history.h5", metavar="PATH",
-                   help="File to save generation history (HDF5)")
+                   help="File to save per-generation surviving populations (HDF5)")
+    p.add_argument("--evals-file", default="ga_evals.h5", metavar="PATH",
+                   help="File to save every evaluated genome, discarded offspring "
+                        "included (HDF5). Pass '' to skip it — it costs a second "
+                        "full (P, T, 3) D2H copy per generation")
     p.add_argument("--no-plot",      action="store_true")
     return p.parse_args()
 
@@ -178,7 +182,8 @@ def main() -> None:
         farm_cfg, ga_cfg, evaluator, projection, wind_rose,
         cost_cfg=cost_cfg,
         vi_cfg=vi_cfg,
-        history_file=args.history_file
+        history_file=args.history_file,
+        evals_file=args.evals_file,
     )
 
     print(f"\nStarting optimisation:")

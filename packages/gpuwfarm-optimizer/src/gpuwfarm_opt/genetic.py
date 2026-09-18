@@ -74,6 +74,7 @@ class GeneticAlgorithm:
         vi_cfg:          VisualImpactConfig | None = None,
         objectives_mode: str = "lcoe_vi",
         history_file:    str | None = None,
+        evals_file:      str | None = None,
     ) -> None:
         self.farm_cfg   = farm_cfg
         self.ga_cfg     = ga_cfg
@@ -98,13 +99,21 @@ class GeneticAlgorithm:
             farm_cfg, evaluator.turbine_cfg, self.cost_cfg, vi_cfg=vi_cfg
         )
 
-        # Async HDF5 population logger (None when no history_file given)
-        self._logger: AsyncPopulationLogger | None = None
-        if history_file:
-            genome_size = farm_cfg.n_turbines * 3
-            self._logger = AsyncPopulationLogger(
-                history_file, ga_cfg.pop_size, genome_size
-            )
+        # Async HDF5 loggers (None when the corresponding file is not given).
+        # _logger      — one row per generation: the surviving population.
+        # _eval_logger — one row per evaluation batch: every genome the evaluator
+        #                ever saw (row 0 = initial population, row g+1 = the
+        #                offspring of generation g). Survivors are a subset of
+        #                these, so this file alone is the complete search history.
+        genome_size = farm_cfg.n_turbines * 3
+        self._logger: AsyncPopulationLogger | None = (
+            AsyncPopulationLogger(history_file, ga_cfg.pop_size, genome_size)
+            if history_file else None
+        )
+        self._eval_logger: AsyncPopulationLogger | None = (
+            AsyncPopulationLogger(evals_file, ga_cfg.pop_size, genome_size)
+            if evals_file else None
+        )
 
     # ──────────────────────────────────────────────────────────────────
     # Logger lifecycle
@@ -112,12 +121,15 @@ class GeneticAlgorithm:
 
     def close(self) -> None:
         """
-        Flush and close the history logger. Idempotent, so it is safe to call
-        after run() (which closes it itself) or twice from nested scopes.
+        Flush and close the history loggers. Idempotent, so it is safe to call
+        after run() (which closes them itself) or twice from nested scopes.
         """
         if self._logger is not None:
             self._logger.close()
             self._logger = None
+        if self._eval_logger is not None:
+            self._eval_logger.close()
+            self._eval_logger = None
 
     def __enter__(self) -> "GeneticAlgorithm":
         return self
@@ -521,6 +533,24 @@ class GeneticAlgorithm:
     # History logging and results
     # ──────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _write(
+        logger:     AsyncPopulationLogger | None,
+        row:        int,
+        pop:        cp.ndarray,
+        aep:        cp.ndarray,
+        objectives: np.ndarray | None,
+    ) -> None:
+        """D2H copy + queue one row. No-op when the logger is None."""
+        if logger is None:
+            return
+        logger.log(
+            row,
+            cp.asnumpy(pop).reshape(pop.shape[0], -1),
+            cp.asnumpy(aep).astype(np.float32),
+            objectives=objectives,
+        )
+
     def log(
         self,
         generation: int,
@@ -529,19 +559,32 @@ class GeneticAlgorithm:
         objectives: np.ndarray | None = None,
     ) -> None:
         """
-        Write one generation to the HDF5 history. No-op when the GA was built
-        without a history_file.
+        Write one generation's surviving population to the HDF5 history. No-op
+        when the GA was built without a history_file.
 
         The generation number is the dataset row address, so a hand-written loop
         must pass a monotonically increasing value. This is the only place the
         full (P, T, 3) population crosses to the host — by far the largest
         transfer in the loop, which is why it is opt-in.
         """
-        if self._logger is None:
-            return
-        pop_np = cp.asnumpy(pop).reshape(pop.shape[0], -1)
-        aep_np = cp.asnumpy(aep).astype(np.float32)
-        self._logger.log(generation, pop_np, aep_np, objectives=objectives)
+        self._write(self._logger, generation, pop, aep, objectives)
+
+    def log_evals(
+        self,
+        row:        int,
+        pop:        cp.ndarray,
+        aep:        cp.ndarray,
+        objectives: np.ndarray | None = None,
+    ) -> None:
+        """
+        Write one *evaluated batch* to the evals history — the complete search
+        record, including the offspring that lose the survival merge and are
+        therefore absent from log(). No-op without an evals_file.
+
+        run() uses row 0 for the initial population and row g+1 for the offspring
+        of generation g; a hand-written loop owns the row counter itself.
+        """
+        self._write(self._eval_logger, row, pop, aep, objectives)
 
     def best(
         self,
@@ -609,6 +652,7 @@ class GeneticAlgorithm:
             pop = self.project(self.init_population(seed_layout=seed_layout))
             aep = self.evaluate(pop)
             obj = self.compute_objectives(pop, aep) if multi_objective else None
+            self.log_evals(0, pop, aep, objectives=obj)
 
             for g in range(cfg.n_generations):
                 # Mating pool
@@ -622,9 +666,12 @@ class GeneticAlgorithm:
                 children = self.project(self.mutate(self.crossover(parents)))
                 aep_c    = self.evaluate(children)
 
+                # Every genome the evaluator saw, before the merge discards half
+                obj_c = self.compute_objectives(children, aep_c) if multi_objective else None
+                self.log_evals(g + 1, children, aep_c, objectives=obj_c)
+
                 # Survival (elitist merge of parents + offspring)
                 if multi_objective:
-                    obj_c = self.compute_objectives(children, aep_c)
                     pop, aep, obj = self.survive_pareto(
                         pop, aep, obj, children, aep_c, obj_c
                     )

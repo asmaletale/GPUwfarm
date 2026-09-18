@@ -29,8 +29,11 @@ concatenated to 2P and truncated back to P, so the best individual can never be
 lost and no separate elite-reinsertion step is needed.
 """
 from __future__ import annotations
+import os
+
 import numpy as np
 import cupy as cp
+import h5py
 
 from gpuwfarm_core.config import FarmConfig, CostConfig, VisualImpactConfig
 from gpuwfarm_opt.config import GAConfig
@@ -75,6 +78,7 @@ class GeneticAlgorithm:
         objectives_mode: str = "lcoe_vi",
         history_file:    str | None = None,
         evals_file:      str | None = None,
+        resume:          bool = False,
     ) -> None:
         self.farm_cfg   = farm_cfg
         self.ga_cfg     = ga_cfg
@@ -106,14 +110,65 @@ class GeneticAlgorithm:
         #                offspring of generation g). Survivors are a subset of
         #                these, so this file alone is the complete search history.
         genome_size = farm_cfg.n_turbines * 3
+
+        # Read the checkpoint *before* the loggers open the file for writing —
+        # HDF5 will not hand out a read handle while the writer thread holds it.
+        self._resume_pop, self._start_gen, self._resume_history = (
+            self._load_checkpoint(history_file, ga_cfg.pop_size, genome_size)
+            if resume and history_file else (None, 0, [])
+        )
+
+        # Append rather than truncate when continuing an existing history.
+        append = self._resume_pop is not None
         self._logger: AsyncPopulationLogger | None = (
-            AsyncPopulationLogger(history_file, ga_cfg.pop_size, genome_size)
+            AsyncPopulationLogger(history_file, ga_cfg.pop_size, genome_size, append)
             if history_file else None
         )
         self._eval_logger: AsyncPopulationLogger | None = (
-            AsyncPopulationLogger(evals_file, ga_cfg.pop_size, genome_size)
+            AsyncPopulationLogger(evals_file, ga_cfg.pop_size, genome_size, append)
             if evals_file else None
         )
+
+    # ──────────────────────────────────────────────────────────────────
+    # Checkpointing
+    # ──────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_checkpoint(
+        history_file: str, pop_size: int, genome_size: int
+    ) -> tuple[cp.ndarray | None, int, list[float]]:
+        """
+        Read the last surviving population out of an existing history file.
+
+        The history file *is* the checkpoint — the logger flushes every row, so
+        whatever generations reached disk before an interruption are resumable,
+        even after a SIGKILL that ran no cleanup. A missing or empty file simply
+        starts from scratch, which is what makes `resume=True` safe to leave on.
+
+        Returns:
+            pop:       (P, T, 3) last logged population, or None to start fresh
+            start_gen: the generation to resume at (= number of rows on disk)
+            history:   best AEP per already-completed generation
+        """
+        if not os.path.exists(history_file):
+            return None, 0, []
+
+        with h5py.File(history_file, "r") as f:
+            if "genomes" not in f or f["genomes"].shape[0] == 0:
+                return None, 0, []
+            stored_pop, stored_genome = f["genomes"].shape[1:]
+            if (stored_pop, stored_genome) != (pop_size, genome_size):
+                raise ValueError(
+                    f"'{history_file}' holds (pop={stored_pop}, genome={stored_genome}) "
+                    f"but this GA is configured for (pop={pop_size}, genome={genome_size}). "
+                    "Resume needs matching pop_size and n_turbines; point --history-file "
+                    "at a different path to start a new run."
+                )
+            start_gen = int(f["genomes"].shape[0])
+            pop = f["genomes"][-1].reshape(pop_size, -1, 3)
+            history = f["fitnesses"][:].max(axis=1).tolist()
+
+        return cp.asarray(pop, dtype=cp.float32), start_gen, history
 
     # ──────────────────────────────────────────────────────────────────
     # Logger lifecycle
@@ -646,15 +701,27 @@ class GeneticAlgorithm:
             best_vi_individual:(T, 3) lowest-VI Pareto member, None if single-objective
         """
         cfg = self.ga_cfg
-        history: list[float] = []
+        history: list[float] = list(self._resume_history)
 
         try:
-            pop = self.project(self.init_population(seed_layout=seed_layout))
-            aep = self.evaluate(pop)
-            obj = self.compute_objectives(pop, aep) if multi_objective else None
-            self.log_evals(0, pop, aep, objectives=obj)
+            if self._resume_pop is not None:
+                # Resumed: the checkpointed population is re-evaluated rather
+                # than read back from the file, so aep/objectives always agree
+                # with the *current* wind rose and configs. One generation's
+                # worth of work, against a whole run saved.
+                pop = self._resume_pop
+                aep = self.evaluate(pop)
+                obj = self.compute_objectives(pop, aep) if multi_objective else None
+                if verbose:
+                    print(f"Resuming at generation {self._start_gen} "
+                          f"(best AEP so far: {history[-1]:.4e} kWh)")
+            else:
+                pop = self.project(self.init_population(seed_layout=seed_layout))
+                aep = self.evaluate(pop)
+                obj = self.compute_objectives(pop, aep) if multi_objective else None
+                self.log_evals(0, pop, aep, objectives=obj)
 
-            for g in range(cfg.n_generations):
+            for g in range(self._start_gen, cfg.n_generations):
                 # Mating pool
                 if multi_objective:
                     ranks, distances = self.fast_nondominated_sort(obj)

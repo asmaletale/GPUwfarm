@@ -20,10 +20,17 @@ class AsyncPopulationLogger:
         fitnesses — (n_gens, n_individuals)              float32
     """
 
-    def __init__(self, filepath: str, n_individuals: int, genome_size: int) -> None:
+    def __init__(
+        self,
+        filepath: str,
+        n_individuals: int,
+        genome_size: int,
+        append: bool = False,
+    ) -> None:
         self._filepath = filepath
         self._n_individuals = n_individuals
         self._genome_size = genome_size
+        self._append = append
         self._queue: queue.Queue = queue.Queue()
         self._thread = threading.Thread(target=self._writer, daemon=True)
         self._thread.start()
@@ -45,24 +52,31 @@ class AsyncPopulationLogger:
         self._thread.join()
 
     def _writer(self) -> None:
-        with h5py.File(self._filepath, "w") as f:
-            genomes_ds = f.create_dataset(
-                "genomes",
-                shape=(0, self._n_individuals, self._genome_size),
-                maxshape=(None, self._n_individuals, self._genome_size),
-                dtype=np.float32,
-                chunks=(1, self._n_individuals, self._genome_size),
-                **hdf5plugin.LZ4(),
-            )
-            fitnesses_ds = f.create_dataset(
-                "fitnesses",
-                shape=(0, self._n_individuals),
-                maxshape=(None, self._n_individuals),
-                dtype=np.float32,
-                chunks=(1, self._n_individuals),
-                **hdf5plugin.LZ4(),
-            )
-            objectives_ds = None
+        # "a" keeps the datasets a previous run left behind, so a resumed run
+        # appends to its own history instead of truncating it.
+        with h5py.File(self._filepath, "a" if self._append else "w") as f:
+            if "genomes" in f:
+                genomes_ds   = f["genomes"]
+                fitnesses_ds = f["fitnesses"]
+                objectives_ds = f.get("objectives")
+            else:
+                genomes_ds = f.create_dataset(
+                    "genomes",
+                    shape=(0, self._n_individuals, self._genome_size),
+                    maxshape=(None, self._n_individuals, self._genome_size),
+                    dtype=np.float32,
+                    chunks=(1, self._n_individuals, self._genome_size),
+                    **hdf5plugin.LZ4(),
+                )
+                fitnesses_ds = f.create_dataset(
+                    "fitnesses",
+                    shape=(0, self._n_individuals),
+                    maxshape=(None, self._n_individuals),
+                    dtype=np.float32,
+                    chunks=(1, self._n_individuals),
+                    **hdf5plugin.LZ4(),
+                )
+                objectives_ds = None
             while True:
                 item = self._queue.get()
                 if item is None:
@@ -88,3 +102,7 @@ class AsyncPopulationLogger:
                     if objectives_ds.shape[0] < new_size:
                         objectives_ds.resize(new_size, axis=0)
                     objectives_ds[generation] = objectives.astype(np.float32)
+                # Flush every row: this is what makes the file resumable after a
+                # hard kill (SIGTERM/SIGKILL run no cleanup, so close() may never
+                # happen). Measured at ~0.2 ms against a ~190 ms generation.
+                f.flush()

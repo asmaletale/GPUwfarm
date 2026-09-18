@@ -111,6 +111,29 @@ row g+1 = the offspring of generation g, i.e. exactly `P * (n_generations + 1)`
 rows, one per evaluator call. Same HDF5 schema as the history file, so
 `analyze_history.py` reads either.
 
+### Resuming an interrupted run
+
+The history file *is* the checkpoint — the logger flushes every row, so a run
+killed by Ctrl-C, SIGTERM or SIGKILL (none of which run `finally`) leaves a
+readable, resumable file. `resume=True` / `--resume` reads the last logged
+population, appends to the same datasets instead of truncating, and runs
+`range(start_gen, n_generations)`:
+
+```bash
+gpuwfarm-optimize --generations 100                 # dies at generation 50
+gpuwfarm-optimize --generations 100 --resume        # picks up at 50, runs to 99
+gpuwfarm-optimize --generations 200 --resume        # not converged: 100 more
+```
+
+Extending a finished run and resuming a killed one are the same operation —
+only `--generations` differs. The checkpointed population is re-evaluated on
+resume (one generation's cost) so AEP and objectives always agree with the
+*current* wind rose and configs rather than the stored floats. A missing file
+starts from scratch, so `--resume` is safe to leave on; a file whose
+`pop_size`/`n_turbines` disagree with the config raises instead of corrupting.
+The RNG is deliberately not checkpointed — a resumed run is not bit-identical
+to an uninterrupted one.
+
 Survival is the elitism: parents and offspring are merged to 2P and truncated
 back to P, so the incumbent can never be lost (`GAConfig.elite` is unused). Pass
 `history_file=` and use the GA as a context manager — the HDF5 writer thread needs

@@ -80,6 +80,10 @@ def parse_args():
                    help="File to save every evaluated genome, discarded offspring "
                         "included (HDF5). Pass '' to skip it — it costs a second "
                         "full (P, T, 3) D2H copy per generation")
+    p.add_argument("--resume", action="store_true",
+                   help="Continue from the last generation in --history-file. "
+                        "Raise --generations to extend a converged-too-early run; "
+                        "starts from scratch if the file does not exist yet")
     p.add_argument("--no-plot",      action="store_true")
     return p.parse_args()
 
@@ -184,6 +188,7 @@ def main() -> None:
         vi_cfg=vi_cfg,
         history_file=args.history_file,
         evals_file=args.evals_file,
+        resume=args.resume,
     )
 
     print(f"\nStarting optimisation:")

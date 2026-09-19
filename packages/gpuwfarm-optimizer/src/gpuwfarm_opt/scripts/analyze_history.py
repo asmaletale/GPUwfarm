@@ -21,8 +21,13 @@ from pathlib import Path
 # Multi-objective convergence helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def _pareto_mask_2d(objectives: np.ndarray) -> np.ndarray:
-    """Return boolean mask of non-dominated solutions (2-objective minimisation)."""
+def _pareto_mask(objectives: np.ndarray) -> np.ndarray:
+    """
+    Boolean mask of the non-dominated rows of an (n, M) minimisation matrix.
+
+    Works for any number of objectives -- the dominance reduction is over the
+    objective axis, not a hardcoded pair.
+    """
     obj_i = objectives[:, np.newaxis, :]   # (n, 1, 2)
     obj_j = objectives[np.newaxis, :, :]   # (1, n, 2)
     dominates_i = np.all(obj_j <= obj_i, axis=2) & np.any(obj_j < obj_i, axis=2)
@@ -30,15 +35,42 @@ def _pareto_mask_2d(objectives: np.ndarray) -> np.ndarray:
     return ~dominates_i.any(axis=1)
 
 
-def _hypervolume_2d(front_obj: np.ndarray, ref: np.ndarray) -> float:
+def _hypervolume_mc(
+    front_obj: np.ndarray, ref: np.ndarray, n_samples: int = 200_000
+) -> float:
     """
-    Hypervolume indicator for a 2-objective minimisation front.
+    Monte-Carlo hypervolume for M > 2 objectives.
 
-    Sweep-line: sort by obj-0 ascending, sum L-shaped strips to the reference.
-    ref must satisfy ref[i] >= max(front_obj[:, i]) for i in {0, 1}.
+    Samples the box between the front's own minimum and the reference point and
+    measures the fraction dominated by the front. Exact sweep methods (WFG) are
+    a lot of code for a diagnostic; this is within a couple of percent of exact
+    at the default sample count, which is enough to watch a convergence curve.
+
+    ponytail: swap in WFG if the estimate's noise ever obscures a real trend.
     """
     if len(front_obj) == 0:
         return 0.0
+    lo = front_obj.min(axis=0)
+    box = float(np.prod(np.maximum(ref - lo, 0.0)))
+    if box <= 0.0:
+        return 0.0
+    pts = np.random.uniform(lo, ref, size=(n_samples, front_obj.shape[1]))
+    dominated = (front_obj[:, None, :] <= pts[None, :, :]).all(axis=2).any(axis=0)
+    return box * float(dominated.mean())
+
+
+def _hypervolume(front_obj: np.ndarray, ref: np.ndarray) -> float:
+    """
+    Hypervolume indicator for a minimisation front.
+
+    Exact sweep-line for 2 objectives (sort by obj-0 ascending, sum L-shaped
+    strips to the reference); Monte-Carlo above that. ref must dominate the
+    whole front: ref[i] >= max(front_obj[:, i]) for every i.
+    """
+    if len(front_obj) == 0:
+        return 0.0
+    if front_obj.shape[1] != 2:
+        return _hypervolume_mc(front_obj, ref)
     order = np.argsort(front_obj[:, 0])
     f1 = front_obj[order, 0]
     f2 = front_obj[order, 1]
@@ -97,10 +129,10 @@ def load_mo_convergence(
         objs_g = objs_g[finite_mask]
         if len(objs_g) == 0:
             continue
-        front = objs_g[_pareto_mask_2d(objs_g)]
+        front = objs_g[_pareto_mask(objs_g)]
         if len(front) > 0:
             vi_per_gen[g] = front[:, 1].min()
-            hv_per_gen[g] = _hypervolume_2d(front, ref)
+            hv_per_gen[g] = _hypervolume(front, ref)
 
     return np.arange(n_gens), vi_per_gen, hv_per_gen
 

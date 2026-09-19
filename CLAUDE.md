@@ -38,8 +38,11 @@ reinforcement-learning loop):
   dataclasses. Depends only on `numpy` + `cupy`. This layer imports nothing
   from the optimizer.
 - **`gpuwfarm_opt`** (`packages/gpuwfarm-optimizer/`) — the optimization layer:
-  genetic algorithm, feasibility-repair projection chain, CLI, and analysis
-  scripts. Depends on `gpuwfarm_core` (injects a `FarmEvaluator` into the GA).
+  three interchangeable optimizers (genetic / particle swarm / SPSA gradient
+  descent), the pluggable objective set, the feasibility-repair projection
+  chain, CLI, and analysis scripts. Depends on `gpuwfarm_core` (injects a
+  `FarmEvaluator` into the optimizer). `torch` is an optional extra, used only
+  by `GradientDescent` to drive `torch.optim` from SPSA estimates.
 
 Standalone evaluation (no optimizer imported):
 
@@ -73,6 +76,8 @@ Reference scripts at the repo root, meant to be read and stepped through:
 | `example_core.py` | the AEP pipeline stage by stage, with shapes/dtypes annotated |
 | `example_optimizer.py` | the single-objective GA generation loop |
 | `example_optimizer_mo.py` | the NSGA-II loop (differs in three marked lines) |
+| `example_optimizer_pso.py` | the MOPSO loop — swarm state threaded through the stages |
+| `example_optimizer_gd.py` | the SPSA gradient loop — Chebyshev decomposition |
 
 Evaluation stages (`gpuwfarm_core.physics.farm_evaluator`):
 
@@ -89,27 +94,118 @@ The four wake models were always directly callable (`ev.velocity_model.compute(.
 etc.); only this glue was hidden. `N_JACOBI_ITERS` is now the default of
 `evaluate(n_jacobi=...)`, so a hand-written loop sets its own pass count.
 
-Optimizer stages (`gpuwfarm_opt.genetic`) — all `(P,T,3) → (P,T,3)` unless noted:
+Optimizer stages — all `(P,T,3) → (P,T,3)` unless noted.
+
+**Three optimizers, one interface.** `GeneticAlgorithm`, `ParticleSwarm` and
+`GradientDescent` all subclass `Optimizer` (`gpuwfarm_opt/base.py`), take the
+same constructor arguments, write the same HDF5 history and return the same
+4-tuple from `run()`, so they are interchangeable and the analysis scripts read
+any of them. Shared stages, on the base:
 
 ```
 init_population(seed_layout) / project(pop) / evaluate(pop) → aep (P,)
-compute_objectives(pop, aep)          → (P, 2) numpy, minimisation convention
+compute_objectives(pop, aep)          → (P, M) numpy, minimisation convention
 fast_nondominated_sort(objectives)    → ranks (P,), crowding distance (P,)
+pareto_select(pop, obj, n, ranks, cd) → (selected pop, indices)
+log(iteration, pop, aep, objectives) / log_evals(row, pop, aep, objectives)
+best(pop, aep, objectives)            → (best AEP, front, best-last-objective)
+best_per_objective(pop, objectives)   → {name: (T,3)} — the general-M version
+```
+
+GA-only (`gpuwfarm_opt.genetic`):
+
+```
 tournament_aep(pop, aep)              → mating pool     (single-objective)
 tournament_pareto(pop, ranks, cd)     → mating pool     (NSGA-II)
 crossover(pop) / mutate(pop)          → offspring
 survive_aep(pop, aep, ch, aep_c)      → (pop, aep)               (mu + lambda)
 survive_pareto(pop, aep, obj, ch, aep_c, obj_c) → (pop, aep, obj) (mu + lambda)
-log(generation, pop, aep, objectives) / best(pop, aep, objectives)
-log_evals(row, pop, aep, objectives)  → every evaluated genome (evals_file=)
 ```
+
+PSO-only (`gpuwfarm_opt.swarm`) — MOPSO with an external Pareto archive:
+
+```
+init_swarm(pop)                             → vel (P,T,3)
+select_leaders(archive, archive_obj, n)     → (n,T,3), roulette on crowding distance
+velocity(pop, vel, pbest, leaders)          → vel
+advance(pop, vel)                           → pop (+ box clip; project() separately)
+update_pbest(pop, obj, pbest, pbest_obj)    → (pbest, pbest_obj)   Pareto dominance
+archive_update(archive, archive_obj, pop, obj) → (archive, archive_obj)
+```
+
+GD-only (`gpuwfarm_opt.gradient`) — SPSA gradients into `torch.optim`:
+
+```
+weight_vectors()                            → (P, M) simplex weights (Das-Dennis)
+init_ideal() / update_ideal(obj, z_min, z_max) → running (z_min, z_max)
+scalarize(obj, weights, z_min, z_max)       → (P,) augmented Chebyshev
+perturbation(pop)                           → (P,T,3) Rademacher, per-column scale
+spsa_gradient(pop, weights, z_min, z_max)   → (P,T,3) gradient estimate
+init_adam(pop) → AdamState / step(pop, grad, adam) → pop
+```
+
+**Stateful algorithms stay pure.** PSO carries velocity, personal bests and an
+archive; GD carries Adam's momentum. None of it is stored on the instance —
+each stage takes the state it reads as an argument and returns the new value,
+the way `survive_pareto` already does. The state lives in your loop as a named
+array, so it can be inspected, logged or replaced. For Adam this is not
+cosmetic: torch keys its moment buffers to *tensor identity*, so leaves
+reallocated inside `step()` would silently reset `(m, v, t)` and degrade Adam
+to plain SGD without raising anything. `init_adam()` creates them once.
+
+**Why SPSA and not autodiff.** The physics core is CuPy and has no derivatives,
+and porting it to torch would mean maintaining a second copy of the FLORIS port.
+Worse, two things being optimised have no useful gradient anyway: visual impact
+is a sorted sweep-line union area (`cp.sort` + hard coverage masks + `max`,
+`gpuwfarm_core/objectives.py:338`), and the power curve is a lookup table that
+is flat above rated. SPSA never differentiates — it only evaluates — so all of
+that is irrelevant, including the non-smooth `max` inside Chebyshev
+scalarisation. It costs 2 evaluations per iteration regardless of turbine
+count, and because the evaluator is already batched over P, the ± perturbations
+stack into one `(2P, T, 3)` call. Perturbed points are evaluated **unprojected**
+so spacing repair cannot cancel the perturbation; only the accepted step is
+projected.
+
+Two SPSA details that are load-bearing: the perturbation must be **Rademacher**
+(±1), not Gaussian, because the estimator divides by it and the proof needs
+finite inverse moments; and `spsa_c`/`lr` are split into metres and degrees
+because x/y live on a 2 km farm while yaw lives in ±0.5 rad.
+
+### Pluggable objectives
+
+Which objectives are optimised is configuration, not optimizer logic. An
+objective is any object with `name`, `direction` ("min"/"max"), and a batched
+`__call__(pop, aep, wind_rose) -> (P,) cupy`:
+
+```python
+from gpuwfarm_opt.objectives import ObjectiveSet, LCOE, VisualImpact
+
+class Noise:
+    name, direction = "noise", "min"
+    def __call__(self, pop, aep, wind_rose):
+        return my_batched_noise_model(pop)          # (P,) cupy
+
+GeneticAlgorithm(..., objectives=ObjectiveSet([
+    LCOE(obj_eval), VisualImpact(obj_eval), Noise(),
+]))
+```
+
+`ObjectiveSet` stacks them to `(P, M)` and negates the `"max"` columns, so
+everything downstream can assume "smaller is better". Adding an objective needs
+no change to `fast_nondominated_sort`, `_crowding_distance`, `pareto_select`,
+the HDF5 logger (it infers `n_obj` from the data) or `extract_pareto.py`.
+`analyze_history.py` handles any M — exact hypervolume for M=2, Monte-Carlo
+above that. Passing `objectives=` overrides `objectives_mode`; the built-in
+`"lcoe_vi"` and `"aep_vi"` pairs are unchanged, column for column and sign for
+sign.
 
 `log()` runs after `survive_*`, so it records the P survivors — the offspring
 that lose the merge are evaluated and then dropped. Pass `evals_file=` as well
 for the complete search record: `run()` writes row 0 = initial population and
 row g+1 = the offspring of generation g, i.e. exactly `P * (n_generations + 1)`
 rows, one per evaluator call. Same HDF5 schema as the history file, so
-`analyze_history.py` reads either.
+`analyze_history.py` reads either. PSO uses the same row semantics; GD logs the
+batch the gradient was taken at, i.e. *before* that iteration's step.
 
 ### Resuming an interrupted run
 
@@ -132,7 +228,14 @@ resume (one generation's cost) so AEP and objectives always agree with the
 starts from scratch, so `--resume` is safe to leave on; a file whose
 `pop_size`/`n_turbines` disagree with the config raises instead of corrupting.
 The RNG is deliberately not checkpointed — a resumed run is not bit-identical
-to an uninterrupted one.
+to an uninterrupted one. The same applies to the algorithms' own state: a
+resumed PSO restarts its velocity, personal bests and Pareto archive from the
+checkpointed swarm, and a resumed GD restarts Adam's moments (it does restore
+its running ideal point from the logged objectives, so the Chebyshev
+normalisation stays continuous across the boundary).
+
+`--optimizer ga|pso|gd` picks the algorithm; every other flag keeps its
+meaning, and all three write the same history format.
 
 Survival is the elitism: parents and offspring are merged to 2P and truncated
 back to P, so the incumbent can never be lost (`GAConfig.elite` is unused). Pass
@@ -167,8 +270,12 @@ GPUwfarm/
 └── packages/gpuwfarm-optimizer/         # OPTIMIZER (depends on gpuwfarm-core)
     ├── pyproject.toml
     ├── src/gpuwfarm_opt/
-    │   ├── config.py                    # GAConfig
-    │   ├── genetic.py                   # GeneticAlgorithm
+    │   ├── config.py                    # OptimizerConfig + GA/PSO/GD configs
+    │   ├── base.py                      # Optimizer: shared stages, logging, resume
+    │   ├── objectives.py                # Objective protocol, ObjectiveSet, LCOE/VI/AEP
+    │   ├── genetic.py                   # GeneticAlgorithm (NSGA-II)
+    │   ├── swarm.py                     # ParticleSwarm (MOPSO + Pareto archive)
+    │   ├── gradient.py                  # GradientDescent (SPSA + torch.optim)
     │   ├── population_logger.py         # async HDF5 history logger
     │   ├── projection/                  # Feasibility repair operators
     │   ├── main.py                      # CLI entry point (gpuwfarm-optimize)
@@ -290,7 +397,8 @@ Declared per package in the respective `pyproject.toml` (no top-level
 
 ```
 gpuwfarm-core:       numpy, cupy-cuda12x   (extras: floris → pyyaml; test → pytest, pyyaml, floris)
-gpuwfarm-optimizer:  gpuwfarm-core, numpy, h5py, hdf5plugin   (extras: viz → matplotlib)
+gpuwfarm-optimizer:  gpuwfarm-core, numpy, h5py, hdf5plugin
+                     (extras: viz → matplotlib, gd → torch)
 ```
 
 Note: `scipy` was listed historically but is unused — power-curve lookup uses

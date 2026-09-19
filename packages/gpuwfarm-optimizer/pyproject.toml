@@ -19,6 +19,11 @@ dependencies = [
 viz = ["matplotlib"]
 # FLORIS-YAML input loading via the core loader.
 floris = ["gpuwfarm-core[floris]"]
+# GradientDescent drives torch.optim (Adam/SGD/RMSprop) from SPSA estimates,
+# handed over zero-copy via dlpack. On Windows CuPy also borrows the CUDA
+# runtime DLLs that torch bundles, so torch is in practice already required
+# there — this declares what was previously an undeclared dependency.
+gd = ["torch"]
 
 [project.scripts]
 gpuwfarm-optimize = "gpuwfarm_opt.main:main"
